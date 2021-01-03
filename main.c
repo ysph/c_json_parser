@@ -3,9 +3,8 @@
 
 static const int CC_SIZE = 10;
 static const int SC_SIZE = 9;
-static const int CONTROL_CHARS[] = {0, 7, 8, 9, 10, 11, 12, 13, 26, 27};
+static const int CONTROL_CHARS[] = {0, 7, 8, 9, 10, 11, 12, 13, 26, 27}; // check out the ascii table
 static const int SOLIDUS_CHARS[] = {34, 92, 47, 98, 102, 110, 114, 116, 117};
-
 
 int parse_string(FILE *fptr, int *position, int *line) {
 	char ch;
@@ -28,7 +27,7 @@ int parse_string(FILE *fptr, int *position, int *line) {
 					printf("%c", ch);
 					if ((ch >= 48 && ch <= 57) || (ch >= 65 && ch <= 70) || (ch >= 97 && ch <= 102)) continue;
 					else {
-						printf("Bad string '%c'\n", ch);
+						printf("Error: bad string '%c'\n", ch);
 						return ch;
 					}
 				}
@@ -48,9 +47,10 @@ int parse_whitespace(FILE *fptr, int *position, int *line) {
 			case '\n':
 				*line += 1;
 				*position = 0;
+				break;
+			case '\t':
 			case ' ':
 			case '\r':
-			case '\t':
 				*position += 1;
 				break;
 			default:
@@ -72,7 +72,27 @@ int parse_value(FILE *fptr, int *position, int *line) {
 			if (returnCode) return returnCode;
 			return parse_whitespace(fptr, position, line);
 		case '{':
-			puts("parsing object");
+			printf("object={");
+			PARSE_OBJECT:
+			returnCode = parse_whitespace(fptr, position, line);
+			if (returnCode == '}') return parse_whitespace(fptr, position, line);
+			if (returnCode != '"') return returnCode;
+			printf("\"");
+			returnCode = parse_string(fptr, position, line);
+			if (returnCode) return returnCode;
+			returnCode = parse_whitespace(fptr, position, line);
+			if (returnCode != ':') {
+				printf("Error: expected ':'\n");
+				return returnCode;
+			}
+			printf(":");
+			returnCode = parse_value(fptr, position, line);
+			if (returnCode == ',') {
+				printf(",");
+				goto PARSE_OBJECT;
+			}
+			if (returnCode != '}') return returnCode;
+			printf("}");
 			return parse_whitespace(fptr, position, line);
 		case '[':
 			printf("[");
@@ -90,14 +110,14 @@ int parse_value(FILE *fptr, int *position, int *line) {
 			if (returnCode != EOF)
 				return parse_whitespace(fptr, position, line);
 
-			printf("Unexpected EOF\n");
+			printf("Error: Unexpected EOF\n");
 			return returnCode;
 		case 't':
 			for (int i = 1; i < 4; ++i) {
 				ch = fgetc(fptr);
 				if (ch == true[i]) continue;
 				else {
-					printf("Inspected '%c' instead of '%c'\n", true[i], ch);
+					printf("Error: Inspected '%c' instead of '%c'\n", true[i], ch);
 					return ch;
 				}
 			}
@@ -108,7 +128,7 @@ int parse_value(FILE *fptr, int *position, int *line) {
 				ch = fgetc(fptr);
 				if (ch == false[i]) continue;
 				else {
-					printf("Inspected '%c' instead of '%c'\n", false[i], ch);
+					printf("Error: Inspected '%c' instead of '%c'\n", false[i], ch);
 					return ch;
 				}
 			}
@@ -119,14 +139,14 @@ int parse_value(FILE *fptr, int *position, int *line) {
 				ch = fgetc(fptr);
 				if (ch == null[i]) continue;
 				else {
-					printf("Inspected '%c' instead of '%c'\n", null[i], ch);
+					printf("Error: Inspected '%c' instead of '%c'\n", null[i], ch);
 					return ch;
 				}
 			}
 			printf("null");
 			return parse_whitespace(fptr, position, line);
 		default:
-			printf("Unexpected '%c'\n", ch);
+			printf("Error: Unexpected '%c'\n", ch);
 			return ch;
 	}
 }
@@ -140,7 +160,9 @@ int parse_json(char *str) {
 
 		int position = 0, line = 1, returnCode;
 		returnCode = parse_value(fptr, &position, &line);
-		if (returnCode != EOF) printf("Error: Expecting EOF, got '%c'\n", returnCode);
+		if (returnCode != EOF) {
+			//printf("Error: Expecting EOF, got '%c'\n", returnCode);
+		}
 
 		//parse_object(fptr, &position, &line);
 		fclose(fptr);
