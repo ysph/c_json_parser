@@ -1,10 +1,106 @@
 // Copyright Mikhail ysph Subbotin
 #include <stdio.h>
+#include <stdlib.h>
 
 static const int CC_SIZE = 10;
 static const int SC_SIZE = 9;
-static const int CONTROL_CHARS[] = {0, 7, 8, 9, 10, 11, 12, 13, 26, 27}; // check out the ascii table
-static const int SOLIDUS_CHARS[] = {34, 92, 47, 98, 102, 110, 114, 116, 117};
+static const int CONTROL_CHARS[] = {0, 7, 8, 9, 10, 11, 12, 13, 26, 27}; // ascii table is available lads
+static const int SOLIDUS_CHARS[] = {'"', 92, '/', 'b', 'f', 'n', 'r', 't', 'u'};
+
+int parse_number(FILE *fptr, int *position, int *line, char number[]) {
+	char ch;
+	int peek_how_many = 0;
+	int check_once;
+	fseek(fptr, -1, SEEK_CUR);
+	if ((ch = fgetc(fptr)) == EOF) return EOF;
+	if (ch == '-') {
+		peek_how_many += 1;
+		ch = fgetc(fptr);
+	}
+	if (ch == '0') {
+		peek_how_many += 1;
+		if ((ch = fgetc(fptr)) == EOF) return EOF;
+		else goto PARSE_CHOICE;
+	} else if (ch >= '1' && ch <= '9') {
+		peek_how_many += 1;
+		while ((ch = fgetc(fptr)) != EOF) {
+			if (ch >= '0' && ch <= '9') {
+				peek_how_many += 1;
+				continue;
+			}
+			PARSE_CHOICE:
+			if (ch == '.') {
+				//printf("fraction");
+				peek_how_many += 1;
+				goto PARSE_FRACTION;
+			}
+			if (ch == 'e' || ch == 'E') {
+				//printf("exponent");
+				peek_how_many += 1;
+				goto PARSE_EXPONENT;
+			}
+			goto STOP_PARSING;
+		}
+		return EOF;
+	} else if (ch == EOF) {
+		return EOF;
+	} else {
+		printf("Error: no number after minus sign");
+		return ch;
+	}
+
+	PARSE_FRACTION:
+	check_once = 0;
+	while ((ch = fgetc(fptr)) != EOF) {
+		if ((check_once == 0) && !(ch >= '0' && ch <= '9')) {
+			check_once = 1;
+			printf("Error: unterminated fractional number");
+			return ch;
+		}
+		if (ch >= '0' && ch <= '9') {
+			peek_how_many += 1;
+			check_once = 1;
+			continue;
+		}
+		if (ch == 'e' || ch == 'E') {
+			//printf("exponent");
+			peek_how_many += 1;
+			goto PARSE_EXPONENT;
+		}
+		goto STOP_PARSING;
+	}
+	return EOF;
+
+	PARSE_EXPONENT:
+	if ((ch = fgetc(fptr)) == EOF) return EOF;
+	if (ch == '-' || ch == '+') {
+		peek_how_many += 1;
+	} else if (ch >= '0' && ch <= '9') {
+		fseek(fptr, -1, SEEK_CUR);
+	} else {
+		printf("Error: exponent part is missing a number");
+		return ch;
+	}
+	while (ch = fgetc(fptr)) {
+		if (ch == EOF) return EOF;
+		if (ch >= '0' && ch <= '9') {
+			peek_how_many += 1;
+			continue;
+		}
+		goto STOP_PARSING;
+	}
+
+	STOP_PARSING:
+	number = malloc(sizeof(char) * peek_how_many);
+	fseek(fptr, -(peek_how_many + 1), SEEK_CUR);
+	for (int i = 0; i < peek_how_many + 1; ++i) {
+		ch = fgetc(fptr);
+		number[i] = ch;
+	}
+	printf("numba=%s", number);
+	free(number);
+	return ch;
+}
 
 int parse_string(FILE *fptr, int *position, int *line) {
 	char ch;
@@ -45,10 +141,14 @@ int parse_whitespace(FILE *fptr, int *position, int *line) {
 	while ((ch = fgetc(fptr)) != EOF) {
 		switch (ch) {
 			case '\n':
+				//printf("\n");
 				*line += 1;
 				*position = 0;
 				break;
 			case '\t':
+				//printf("\t");
+				*position += 1;
+				break;
 			case ' ':
 			case '\r':
 				*position += 1;
@@ -61,11 +161,26 @@ int parse_whitespace(FILE *fptr, int *position, int *line) {
 }
 int parse_value(FILE *fptr, int *position, int *line) {
 	char returnCode;
+	char number[] = "";
 	static const char true[] = "true";
 	static const char null[] = "null";
 	static const char false[] = "false";
 	char ch = parse_whitespace(fptr, position, line);
 	switch (ch) {
+		case '-':
+		case '0':
+		case '1':
+		case '2':
+		case '3':
+		case '4':
+		case '5':
+		case '6':
+		case '7':
+		case '8':
+		case '9':
+			returnCode = parse_number(fptr, position, line, number);
+			if (returnCode == EOF) return EOF;
+			return parse_whitespace(fptr, position, line);
 		case '"':
 			printf("string = \"");
 			returnCode = parse_string(fptr, position, line);
