@@ -216,7 +216,10 @@ int parse_value(FILE *fptr, int *position, int *line) {
 			fseek(fptr, -1, SEEK_CUR);
 
 			returnCode = parse_value(fptr, position, line);
-			if (returnCode == ']') return returnCode;
+			if (returnCode == ']') {
+				printf("]");
+				return parse_whitespace(fptr, position, line);
+			}
 			while (returnCode != ']' && returnCode == ',') {
 				printf(",");
 				returnCode = parse_value(fptr, position, line);
