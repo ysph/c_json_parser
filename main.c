@@ -93,11 +93,11 @@ int parse_number(FILE *fptr, int *position, int *line, char number[]) {
 	STOP_PARSING:
 	number = malloc(sizeof(char) * peek_how_many);
 	fseek(fptr, -(peek_how_many + 1), SEEK_CUR);
-	for (int i = 0; i < peek_how_many + 1; ++i) {
+	for (int i = 0; i < peek_how_many; ++i) {
 		ch = fgetc(fptr);
 		number[i] = ch;
 	}
-	printf("numba=%s", number);
+	printf("%s", number);
 	free(number);
 	return ch;
 }
