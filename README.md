@@ -13,4 +13,4 @@ gcc main.c
 ```
 
 ## Example of usage
-![example](https://github.com/ysph/simple_json_parser/blob/master/example.jpg?raw=true)
+![Example](example.jpg)
