@@ -19,7 +19,7 @@ double pow_n(int N, int n)
 	return N;
 }
 
-int parse_number(FILE *fptr, int *position, int *line, struct Item *parent)
+int parse_number(FILE *fptr, int *position, int *line, item_t *parent)
 {
 	int negative = 1; // 1 or -1
 	int negative_exp = 0;
@@ -99,9 +99,7 @@ PARSE_FRACTION:
 		}
 
 		if (ch == 'e' || ch == 'E')
-		{
 			goto PARSE_EXPONENT;
-		}
 		goto STOP_PARSING;
 	}
 	return EOF;
@@ -154,36 +152,31 @@ STOP_PARSING:
 	{
 		result = pow_n(result, exponent);
 	}
-
-	parent->num_type = (result == (int64_t)result) ? num_int : num_float;
-	parent->f_num = result;
-	parent->int_num = (int64_t)result;
+	parent->value = (double *)malloc(sizeof(double));
+	*(double *)parent->value = result;
 
 	fseek(fptr, -1, SEEK_CUR);
 	return ch;
 }
 
-int parse_string(FILE *fptr, int *position, int *line, struct Item *parent)
+int parse_string(FILE *fptr, int *position, int *line, item_t *parent)
 {
 	char ch;
-	int str_size = 1;
+	int str_size = parent->size = 1;
 
-	parent->str = (char *)malloc(str_size * sizeof(char));
-	parent->str[0] = '\0';
+	parent->value = (char *)malloc(str_size * sizeof(char));
+	((char *)parent->value)[0] = '\0';
 
 PARSE_NEXT:
 	while ((ch = fgetc(fptr)) != EOF)
 	{
 		if (ch == '"')
-		{
 			return 0;
-		}
 
 		for (int i = 0; i < CC_SIZE; i++)
-		{
 			if (ch == CONTROL_CHARS[i])
 				return ch;
-		}
+
 		if (ch == '\\')
 		{
 			if ((ch = fgetc(fptr)) == EOF)
@@ -248,20 +241,20 @@ PARSE_NEXT:
 
 				str_size += len;
 
-				parent->str = (char *)realloc(parent->str, str_size * sizeof(char));
+				parent->value = (char *)realloc(parent->value, str_size * sizeof(char));
 				switch (len)
 				{
 				case 4:
-					*(parent->str + str_size - 1) = ((hexxx | 0x80) & 0xbf);
+					*((char *)parent->value + str_size - 1) = ((hexxx | 0x80) & 0xbf);
 					hexxx >>= 6;
 				case 3:
-					*(parent->str + str_size - 2) = ((hexxx | 0x80) & 0xbf);
+					*((char *)parent->value + str_size - 2) = ((hexxx | 0x80) & 0xbf);
 					hexxx >>= 6;
 				case 2:
-					*(parent->str + str_size - 3) = ((hexxx | 0x80) & 0xbf);
+					*((char *)parent->value + str_size - 3) = ((hexxx | 0x80) & 0xbf);
 					hexxx >>= 6;
 				case 1:
-					*(parent->str + str_size - 4) = hexxx | fByte[len];
+					*((char *)parent->value + str_size - 4) = hexxx | fByte[len];
 				}
 				goto PARSE_NEXT;
 			default:
@@ -271,9 +264,11 @@ PARSE_NEXT:
 		}
 
 		str_size += 1;
-		parent->str = (char *)realloc(parent->str, str_size * sizeof(char));
-		parent->str[str_size - 2] = ch;
-		parent->str[str_size - 1] = '\0';
+		parent->value = (char *)realloc(parent->value, str_size * sizeof(char));
+		((char *)parent->value)[str_size - 2] = ch;
+		((char *)parent->value)[str_size - 1] = '\0';
+
+		parent->size = str_size;
 	}
 	if (ch == EOF)
 	{
@@ -330,12 +325,8 @@ int parse_value(FILE *fptr, int *position, int *line, item_t *parent)
 		parent->type = json_number;
 		returnCode = parse_number(fptr, position, line, parent);
 
-		// free(parent);
-
 		if (returnCode == FATAL_ERROR)
-		{
 			return FATAL_ERROR;
-		}
 		if (returnCode == EOF)
 			return EOF;
 		return parse_whitespace(fptr, position, line);
@@ -344,13 +335,9 @@ int parse_value(FILE *fptr, int *position, int *line, item_t *parent)
 		returnCode = parse_string(fptr, position, line, parent);
 		if (returnCode == FATAL_ERROR)
 			return FATAL_ERROR;
-
-		// free(parent);
-
-		// if (returnCode) return returnCode;
 		return parse_whitespace(fptr, position, line);
 	case '{':
-		parent->obj_items = (item_t **)malloc(0);
+		parent->items = (item_t **)malloc(0);
 		parent->type = json_object;
 		parent->size = 0;
 
@@ -368,53 +355,37 @@ int parse_value(FILE *fptr, int *position, int *line, item_t *parent)
 			return FATAL_ERROR;
 		}
 		if (returnCode == '}')
-		{
-			// free(parent->obj_items);
-			// free(parent);
-			// empty object
-			return parse_whitespace(fptr, position, line);
-		}
+			return parse_whitespace(fptr, position, line); // empty object
 		if (returnCode != '"')
 		{
 			printf("SyntaxError: Unexpected token %c\n", returnCode);
 			return FATAL_ERROR;
 		}
-		parent->size += 1;
-		parent->obj_items = (item_t **)realloc(parent->obj_items, sizeof(item_t **) * parent->size);
-		parent->obj_items[parent->size - 1] = malloc(sizeof(item_t));
-		parent->obj_items[parent->size - 1]->type = json_string;
-		parent->obj_items[parent->size - 1]->prev = parent;
-
-		returnCode = parse_string(fptr, position, line, parent->obj_items[parent->size - 1]);
+		parent->size += 2; // there should be value for each key
+		parent->items = (item_t **)realloc(parent->items, sizeof(item_t **) * parent->size);
+		parent->items[parent->size - 2] = (item_t *)malloc(sizeof(item_t));
+		parent->items[parent->size - 2]->type = json_string;
+		returnCode = parse_string(fptr, position, line, parent->items[parent->size - 2]);
 		if (returnCode == FATAL_ERROR)
-		{
 			return FATAL_ERROR;
-		}
 		returnCode = parse_whitespace(fptr, position, line);
 		if (returnCode == FATAL_ERROR)
-		{
 			return FATAL_ERROR;
-		}
 		if (returnCode == EOF)
 		{
 			puts("SyntaxError: Unexpected end of JSON input");
 			return EOF;
 		}
 		if (returnCode != ':')
-		{
 			return returnCode;
-		}
-		parent->obj_items[parent->size - 1]->obj_value = malloc(sizeof(item_t));
-		parent->obj_items[parent->size - 1]->obj_value->prev = parent->obj_items[parent->size - 1];
-		returnCode = parse_value(fptr, position, line, parent->obj_items[parent->size - 1]->obj_value);
+
+		parent->items[parent->size - 1] = (item_t *)malloc(sizeof(item_t));
+		returnCode = parse_value(fptr, position, line, parent->items[parent->size - 1]);
 		if (returnCode == FATAL_ERROR)
-		{
 			return FATAL_ERROR;
-		}
 		if (returnCode == ',')
 		{
 			comma_before = 1;
-			// free(parent->obj_items[parent->size - 1]);
 			goto PARSE_OBJECT;
 		}
 		if (returnCode == EOF)
@@ -427,13 +398,9 @@ int parse_value(FILE *fptr, int *position, int *line, item_t *parent)
 			printf("SyntaxError: Unexpected token %c\n", returnCode);
 			return FATAL_ERROR;
 		}
-		// free(parent->obj_items[parent->size - 1]);
-		// free(parent->obj_items);
-		// free(parent);
-
 		return parse_whitespace(fptr, position, line);
 	case '[': // parse_array
-		parent->obj_items = (item_t **)malloc(0);
+		parent->items = (item_t **)malloc(0);
 		parent->size = 0;
 		parent->type = json_array;
 
@@ -444,26 +411,18 @@ int parse_value(FILE *fptr, int *position, int *line, item_t *parent)
 			return FATAL_ERROR;
 		}
 		if (returnCode == ']')
-		{
-			// free(parent->obj_items);
-			// free(parent);
 			return parse_whitespace(fptr, position, line); // empty array
-		}
 		fseek(fptr, -1, SEEK_CUR);
 
 		parent->size += 1;
-		parent->obj_items = (item_t **)realloc(parent->obj_items, sizeof(item_t **) * parent->size);
-		parent->obj_items[parent->size - 1] = malloc(sizeof(item_t));
-		parent->obj_items[parent->size - 1]->prev = parent;
-		returnCode = parse_value(fptr, position, line, parent->obj_items[parent->size - 1]);
+		parent->items = (item_t **)realloc(parent->items, sizeof(item_t **) * parent->size);
+		parent->items[parent->size - 1] = (item_t *)malloc(sizeof(item_t));
+
+		returnCode = parse_value(fptr, position, line, parent->items[parent->size - 1]);
 		if (returnCode == FATAL_ERROR)
 			return FATAL_ERROR;
 		if (returnCode == ']')
-		{
-			// free(parent->obj_items);
-			// free(parent);
 			return parse_whitespace(fptr, position, line);
-		}
 		else if (returnCode != ',')
 		{
 			printf("SyntaxError: Unexpected token %c\n", returnCode);
@@ -472,21 +431,15 @@ int parse_value(FILE *fptr, int *position, int *line, item_t *parent)
 		while (returnCode != ']' && returnCode == ',')
 		{
 			parent->size += 1;
-			parent->obj_items = (item_t **)realloc(parent->obj_items, sizeof(item_t **) * parent->size);
-			parent->obj_items[parent->size - 1] = malloc(sizeof(item_t));
-			parent->obj_items[parent->size - 1]->prev = parent;
-			returnCode = parse_value(fptr, position, line, parent->obj_items[parent->size - 1]);
+			parent->items = (item_t **)realloc(parent->items, sizeof(item_t **) * parent->size);
+			parent->items[parent->size - 1] = (item_t *)malloc(sizeof(item_t));
+			returnCode = parse_value(fptr, position, line, parent->items[parent->size - 1]);
 		}
 		if (returnCode == FATAL_ERROR)
-		{
 			return FATAL_ERROR;
-		}
 		if (returnCode != EOF)
-		{
-			// free(parent->obj_items);
-			// free(parent);
 			return parse_whitespace(fptr, position, line);
-		}
+
 		puts("SyntaxError: Unexpected end of JSON input");
 		return FATAL_ERROR;
 	case 't':
@@ -519,18 +472,12 @@ int parse_value(FILE *fptr, int *position, int *line, item_t *parent)
 			}
 		}
 		if (strcmp(bool_str, "true") == 0)
-		{
 			parent->type = json_true;
-		}
 		else if (strcmp(bool_str, "null") == 0)
-		{
 			parent->type = json_null;
-		}
 		else
-		{
 			parent->type = json_false;
-		}
-		// free(parent);
+
 		return parse_whitespace(fptr, position, line);
 	default:
 		printf("SyntaxError: Unexpected token '%c'\n", ch);
@@ -538,7 +485,7 @@ int parse_value(FILE *fptr, int *position, int *line, item_t *parent)
 	}
 }
 
-int traverse(item_t *head, int indent_s, int64_t depth)
+int print_all(item_t *head, int indent_s, int64_t depth)
 { // indent spacing
 	char space[indent_s + 1];
 	for (int i = 0; i < indent_s; ++i)
@@ -548,15 +495,14 @@ int traverse(item_t *head, int indent_s, int64_t depth)
 	switch (head->type)
 	{
 	case json_string:
-		printf("\"%s\"", head->str);
-		if (head->prev->type == json_object)
-			printf(":");
+		printf("\"%s\"", (char *)head->value);
 		break;
 	case json_number:
-		if (head->num_type == num_int)
-			printf("%ld", head->int_num);
-		else if (head->num_type == num_float)
-			printf("%lf", head->f_num);
+		double numbuh = *(double *)head->value;
+		if (numbuh == (int64_t)numbuh)
+			printf("%ld", (int64_t)numbuh);
+		else
+			printf("%lf", numbuh);
 		break;
 	case json_false:
 		printf("false");
@@ -578,7 +524,7 @@ int traverse(item_t *head, int indent_s, int64_t depth)
 		}
 		for (int i = 0; i < head->size; ++i)
 		{
-			traverse(head->obj_items[i], indent_s, depth);
+			print_all(head->items[i], indent_s, depth);
 			if (i != head->size - 1)
 			{
 				printf(",");
@@ -604,20 +550,28 @@ int traverse(item_t *head, int indent_s, int64_t depth)
 		}
 		for (int i = 0; i < head->size; ++i)
 		{
-			traverse(head->obj_items[i], indent_s, depth); // TODO: string...
-			printf(" ");
-			traverse(head->obj_items[i]->obj_value, indent_s, depth);
-			if (i != head->size - 1)
+			print_all(head->items[i], indent_s, depth);
+			if ((i != head->size - 1) && (i % 2))
 			{
-				printf(",");
+				printf(",\n");
+				for (int64_t i = 0; i < depth; ++i)
+					printf("%s", space);
+			}
+			else if ((i != head->size - 1) && !(i % 2))
+			{
+				printf(":");
+			}
+			else if (i == head->size - 1)
+			{
+				printf("\n");
+				depth--;
+				for (int64_t i = 0; i < depth; ++i)
+					printf("%s", space);
 			}
 			else
 			{
 				depth--;
 			}
-			printf("\n");
-			for (int64_t i = 0; i < depth; ++i)
-				printf("%s", space);
 		}
 		printf("}");
 		break;
@@ -627,6 +581,32 @@ int traverse(item_t *head, int indent_s, int64_t depth)
 	}
 	return 0;
 }
+int free_everything(item_t *Node)
+{
+	switch (Node->type)
+	{
+	// case json_false:
+	// case json_true:
+	// case json_null:
+	//	break;
+	case json_number:
+	case json_string:
+		free(Node->value);
+		break;
+	case json_array:
+		for (int i = 0; i < Node->size; ++i)
+			free_everything(Node->items[i]);
+		free(Node->items);
+		break;
+	case json_object:
+		for (int i = 0; i < Node->size; ++i)
+			free_everything(Node->items[i]);
+		free(Node->items);
+		break;
+	}
+	free(Node);
+	return 0;
+}
 int parse_json(char *str)
 {
 	FILE *fptr;
@@ -634,7 +614,6 @@ int parse_json(char *str)
 	fptr = fopen(str, "r");
 	if (fptr)
 	{
-		// printf("File opened.\n");
 		item_t *head;
 		head = (item_t *)malloc(sizeof(item_t));
 
@@ -647,23 +626,24 @@ int parse_json(char *str)
 		}
 		else if (returnCode == FATAL_ERROR)
 		{
-			// free stuff, cant traverse
+			goto END_THAT;
 		}
 		else
 		{
-			traverse(head, 2, 0);
+			print_all(head, 2, 0);
+			printf("\n");
 		}
+	END_THAT:
+		free_everything(head);
 		fclose(fptr);
-		// printf("\nFile closed.\n\n");
 
 		return 0;
 	}
 
-	return 1;
+	return -1;
 }
 int main(int argc, char *argv[])
 {
-	printf("File opened.");
 	if (argc == 1)
 	{
 		printf("Error: there is no file to parse.\n");

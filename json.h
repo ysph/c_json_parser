@@ -1,17 +1,10 @@
 enum json_types {json_false,json_true,json_null,json_object,json_array,json_string,json_number};
-enum number_type {num_int, num_float};
 
 typedef struct Item {
     int type;
-    int size; // number of children
+    int size; //number of children, x2 in objects (key:pair)
     
-    int num_type;
-    int64_t int_num;
-    double f_num;
-    
-    char *str;
-
-    struct Item **obj_items;
-    struct Item *obj_value;
-    struct Item *prev;
+    void *value;
+   
+    struct Item **items; //for both arrays and objects
 } item_t;
