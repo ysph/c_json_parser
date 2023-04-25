@@ -4,12 +4,9 @@
 #include <stdint.h>
 #include <string.h>
 
+#define min(X, Y) (((X) < (Y)) ? (X) : (Y))
+
 #include "json.h"
-
-#define FATAL_ERROR -2
-
-static const int CC_SIZE = 10;
-static const int CONTROL_CHARS[] = {0, 7, 8, 9, 10, 11, 12, 13, 26, 27}; // search in ascii table
 
 double pow_n(int N, int n)
 {
@@ -19,14 +16,13 @@ double pow_n(int N, int n)
 	return N;
 }
 
-int parse_number(FILE *fptr, int *position, int *line, item_t *parent)
+int parse_number(FILE *fptr, int *restrict position, int *restrict line, item_t *parent)
 {
 	int negative = 1; // 1 or -1
 	int negative_exp = 0;
 	double result = 0;
 	double fraction = 0;
 	int exponent = 0;
-
 	char ch;
 	int check_once;
 	int frac_digits = -1;
@@ -49,26 +45,25 @@ int parse_number(FILE *fptr, int *position, int *line, item_t *parent)
 	else if (ch >= '1' && ch <= '9')
 	{
 		result = (result * 10) + (ch - '0');
-		while ((ch = fgetc(fptr)) != EOF)
+		while (1)
 		{
+			ch = fgetc(fptr);
 			if (ch >= '0' && ch <= '9')
-			{
 				result = (result * 10) + (ch - '0');
-				continue;
-			}
-			result *= negative;
-		PARSE_CHOICE:
-			if (ch == '.')
-			{
-				goto PARSE_FRACTION;
-			}
-			if (ch == 'e' || ch == 'E')
-			{
-				goto PARSE_EXPONENT;
-			}
-			goto STOP_PARSING;
+			else
+				break;
+		};
+		result *= negative;
+	PARSE_CHOICE:
+		if (ch == '.')
+		{
+			goto PARSE_FRACTION;
 		}
-		return EOF;
+		if (ch == 'e' || ch == 'E')
+		{
+			goto PARSE_EXPONENT;
+		}
+		goto STOP_PARSING;
 	}
 	else if (ch == EOF)
 	{
@@ -82,8 +77,9 @@ int parse_number(FILE *fptr, int *position, int *line, item_t *parent)
 
 PARSE_FRACTION:
 	check_once = 0;
-	while ((ch = fgetc(fptr)) != EOF)
+	while (1)
 	{
+		ch = fgetc(fptr);
 		if ((check_once == 0) && !(ch >= '0' && ch <= '9'))
 		{
 			check_once = 1;
@@ -95,26 +91,22 @@ PARSE_FRACTION:
 			fraction = (fraction * 10) + (ch - '0');
 			frac_digits += 1;
 			check_once = 1;
-			continue;
 		}
-
-		if (ch == 'e' || ch == 'E')
-			goto PARSE_EXPONENT;
-		goto STOP_PARSING;
+		else
+		{
+			break;
+		}
 	}
-	return EOF;
-
+	if (ch == 'e' || ch == 'E')
+		goto PARSE_EXPONENT;
+	goto STOP_PARSING;
 PARSE_EXPONENT:
 	if ((ch = fgetc(fptr)) == EOF)
 		return EOF;
 	if (ch == '-' || ch == '+')
-	{
 		negative_exp = (ch == '-') ? 1 : 0;
-	}
 	else if (ch >= '0' && ch <= '9')
-	{
 		fseek(fptr, -1, SEEK_CUR);
-	}
 	else
 	{
 		printf("SyntaxError: Unexpected token %c\n", ch);
@@ -159,14 +151,14 @@ STOP_PARSING:
 	return ch;
 }
 
-int parse_string(FILE *fptr, int *position, int *line, item_t *parent)
+int parse_string(FILE *fptr, int *restrict position, int *restrict line, item_t *parent)
 {
 	char ch;
-	int str_size = parent->size = 1;
+	uint32_t hexxx;
+	uint32_t hexxx2;
+	int str_size = 1;
 
-	parent->value = (char *)malloc(str_size * sizeof(char));
-	((char *)parent->value)[0] = '\0';
-
+	parent->value = (char *)malloc(0);
 PARSE_NEXT:
 	while ((ch = fgetc(fptr)) != EOF)
 	{
@@ -176,12 +168,12 @@ PARSE_NEXT:
 		for (int i = 0; i < CC_SIZE; i++)
 			if (ch == CONTROL_CHARS[i])
 				return ch;
-
 		if (ch == '\\')
 		{
 			if ((ch = fgetc(fptr)) == EOF)
 				return EOF;
 
+		PARSE_SOLIDUS_CHAR:
 			switch (ch)
 			{
 			case '"':
@@ -204,33 +196,57 @@ PARSE_NEXT:
 				ch = '\t';
 				break;
 			case 'u':
-				static const unsigned char fByte[7] = {0x00, 0x00, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc};
-
-				uint32_t hexxx = 0;
-				int len;
+				hexxx = 0;
+				int len = 1;
 
 				for (int i = 0; i < 4; i++)
 				{
 					if ((ch = fgetc(fptr)) == EOF)
 						return EOF;
 					if (ch >= '0' && ch <= '9')
-					{
 						hexxx = (hexxx << 4) + (ch - '0');
-					}
 					else if (ch >= 'a' && ch <= 'f')
-					{
 						hexxx = 10 + (hexxx << 4) + (ch - 'a');
-					}
 					else if (ch >= 'A' && ch <= 'F')
-					{
 						hexxx = 10 + (hexxx << 4) + (ch - 'A');
-					}
 					else
 					{
 						printf("SyntaxError: Unexpected string in JSON\n");
 						return FATAL_ERROR;
 					}
 				}
+
+				if (hexxx >= 0xd800 && hexxx <= 0xdbff)
+				{
+					ch = fgetc(fptr);
+					if (ch != '\\') {
+						fseek(fptr, -1, SEEK_CUR);
+						goto PARSE_NEXT;
+					}
+					ch = fgetc(fptr);
+					if (ch != 'u') {
+						goto PARSE_SOLIDUS_CHAR;
+					}
+
+					hexxx2 = 0;
+					for (int i = 0; i < 4; ++i)
+					{
+						ch = fgetc(fptr);
+						if (ch >= '0' && ch <= '9')
+							hexxx2 = (hexxx2 << 4) + (ch - '0');
+						else if (ch >= 'a' && ch <= 'f')
+							hexxx2 = 10 + (hexxx2 << 4) + (ch - 'a');
+						else if (ch >= 'A' && ch <= 'F')
+							hexxx2 = 10 + (hexxx2 << 4) + (ch - 'A');
+						else
+						{
+							printf("SyntaxError: Unexpected string in JSON\n");
+							return FATAL_ERROR;
+						}
+					}
+					hexxx = 0x10000 + (((hexxx & 0x3FF) << 10) | (hexxx2 & 0x3FF));
+				}
+
 				len = 4;
 				if (hexxx < 0x80)
 					len = 1;
@@ -241,20 +257,23 @@ PARSE_NEXT:
 
 				str_size += len;
 
-				parent->value = (char *)realloc(parent->value, str_size * sizeof(char));
+				parent->value = (char *)realloc((char *)parent->value, str_size * sizeof(char));
 				switch (len)
 				{
 				case 4:
-					*((char *)parent->value + str_size - 1) = ((hexxx | 0x80) & 0xbf);
+					*((char *)parent->value + str_size - (len - 2)) = ((hexxx | 0x80) & 0xbf);
 					hexxx >>= 6;
+					__attribute__((fallthrough));
 				case 3:
-					*((char *)parent->value + str_size - 2) = ((hexxx | 0x80) & 0xbf);
+					*((char *)parent->value + str_size - (len - 1)) = ((hexxx | 0x80) & 0xbf);
 					hexxx >>= 6;
+					__attribute__((fallthrough));
 				case 2:
-					*((char *)parent->value + str_size - 3) = ((hexxx | 0x80) & 0xbf);
+					*((char *)parent->value + str_size - len) = ((hexxx | 0x80) & 0xbf);
 					hexxx >>= 6;
+					__attribute__((fallthrough));
 				case 1:
-					*((char *)parent->value + str_size - 4) = hexxx | fByte[len];
+					*((char *)parent->value + str_size - (len + 1)) = hexxx | fByte[len];
 				}
 				goto PARSE_NEXT;
 			default:
@@ -262,12 +281,10 @@ PARSE_NEXT:
 				return FATAL_ERROR;
 			}
 		}
-
 		str_size += 1;
-		parent->value = (char *)realloc(parent->value, str_size * sizeof(char));
+		parent->value = (char *)realloc((char *)parent->value, str_size * sizeof(char));
 		((char *)parent->value)[str_size - 2] = ch;
 		((char *)parent->value)[str_size - 1] = '\0';
-
 		parent->size = str_size;
 	}
 	if (ch == EOF)
@@ -278,7 +295,7 @@ PARSE_NEXT:
 	printf("SyntaxError: Unexpected token %c in JSON\n", ch);
 	return FATAL_ERROR;
 }
-int parse_whitespace(FILE *fptr, int *position, int *line)
+int parse_whitespace(FILE *fptr, int *restrict position, int *restrict line)
 {
 	char ch;
 	while ((ch = fgetc(fptr)) != EOF)
@@ -302,7 +319,7 @@ int parse_whitespace(FILE *fptr, int *position, int *line)
 	}
 	return EOF;
 }
-int parse_value(FILE *fptr, int *position, int *line, item_t *parent)
+int parse_value(FILE *fptr, int *restrict position, int *restrict line, item_t *parent)
 {
 	int size_bool_str;
 	char bool_str[6];
@@ -485,8 +502,10 @@ int parse_value(FILE *fptr, int *position, int *line, item_t *parent)
 	}
 }
 
-int print_all(item_t *head, int indent_s, int64_t depth)
-{ // indent spacing
+int print_all(item_t *head, int indent_s, size_t depth)
+{
+	double numbuh;
+	// indent spacing
 	char space[indent_s + 1];
 	for (int i = 0; i < indent_s; ++i)
 		space[i] = '_';
@@ -498,7 +517,7 @@ int print_all(item_t *head, int indent_s, int64_t depth)
 		printf("\"%s\"", (char *)head->value);
 		break;
 	case json_number:
-		double numbuh = *(double *)head->value;
+		numbuh = (*(double *)head->value);
 		if (numbuh == (int64_t)numbuh)
 			printf("%ld", (int64_t)numbuh);
 		else
@@ -519,10 +538,10 @@ int print_all(item_t *head, int indent_s, int64_t depth)
 		{
 			depth++;
 			printf("\n");
-			for (int64_t i = 0; i < depth; ++i)
+			for (size_t i = 0; i < depth; ++i)
 				printf("%s", space);
 		}
-		for (int i = 0; i < head->size; ++i)
+		for (size_t i = 0; i < head->size; ++i)
 		{
 			print_all(head->items[i], indent_s, depth);
 			if (i != head->size - 1)
@@ -534,7 +553,7 @@ int print_all(item_t *head, int indent_s, int64_t depth)
 				depth--;
 			}
 			printf("\n");
-			for (int64_t i = 0; i < depth; ++i)
+			for (size_t i = 0; i < depth; ++i)
 				printf("%s", space);
 		}
 		printf("]");
@@ -545,16 +564,16 @@ int print_all(item_t *head, int indent_s, int64_t depth)
 		{
 			depth++;
 			printf("\n");
-			for (int64_t i = 0; i < depth; ++i)
+			for (size_t i = 0; i < depth; ++i)
 				printf("%s", space);
 		}
-		for (int i = 0; i < head->size; ++i)
+		for (size_t i = 0; i < head->size; ++i)
 		{
 			print_all(head->items[i], indent_s, depth);
 			if ((i != head->size - 1) && (i % 2))
 			{
 				printf(",\n");
-				for (int64_t i = 0; i < depth; ++i)
+				for (size_t i = 0; i < depth; ++i)
 					printf("%s", space);
 			}
 			else if ((i != head->size - 1) && !(i % 2))
@@ -565,7 +584,7 @@ int print_all(item_t *head, int indent_s, int64_t depth)
 			{
 				printf("\n");
 				depth--;
-				for (int64_t i = 0; i < depth; ++i)
+				for (size_t i = 0; i < depth; ++i)
 					printf("%s", space);
 			}
 			else
@@ -594,12 +613,12 @@ int free_everything(item_t *Node)
 		free(Node->value);
 		break;
 	case json_array:
-		for (int i = 0; i < Node->size; ++i)
+		for (size_t i = 0; i < Node->size; ++i)
 			free_everything(Node->items[i]);
 		free(Node->items);
 		break;
 	case json_object:
-		for (int i = 0; i < Node->size; ++i)
+		for (size_t i = 0; i < Node->size; ++i)
 			free_everything(Node->items[i]);
 		free(Node->items);
 		break;
@@ -610,7 +629,6 @@ int free_everything(item_t *Node)
 int parse_json(char *str)
 {
 	FILE *fptr;
-
 	fptr = fopen(str, "r");
 	if (fptr)
 	{
@@ -624,16 +642,11 @@ int parse_json(char *str)
 		{
 			printf("SyntaxError: Unexpected token '%c'\n", returnCode);
 		}
-		else if (returnCode == FATAL_ERROR)
-		{
-			goto END_THAT;
-		}
 		else
 		{
 			print_all(head, 2, 0);
 			printf("\n");
 		}
-	END_THAT:
 		free_everything(head);
 		fclose(fptr);
 
