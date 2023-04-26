@@ -16,29 +16,64 @@ double pow_n(int N, int n)
 	return N;
 }
 
+int parse_whitespace(FILE *fptr, int *restrict position, int *restrict line)
+{
+	int8_t ch;
+	while (1)
+	{
+		ch = fgetc(fptr);
+		switch (ch)
+		{
+		case '\n':
+			*line += 1;
+			*position = 0;
+			break;
+		case '\t':
+			*position += 1;
+			break;
+		case ' ':
+		case '\r':
+			*position += 1;
+			break;
+		default:
+			*position += 1;
+			return ch;
+		}
+	}
+	return FATAL_ERROR;
+}
+
 int parse_number(FILE *fptr, int *restrict position, int *restrict line, item_t *parent)
 {
+	char ch;
+	int check_once;
+
 	int negative = 1; // 1 or -1
 	int negative_exp = 0;
 	double result = 0;
 	double fraction = 0;
 	int exponent = 0;
-	char ch;
-	int check_once;
 	int frac_digits = -1;
 	int is_first_digit = 0;
+
+	parent->type = json_number;
 	fseek(fptr, -1, SEEK_CUR);
-	if ((ch = fgetc(fptr)) == EOF)
-		return EOF;
+	ch = fgetc(fptr);
+
+	if (feof(fptr))
+		return FATAL_ERROR;
 	if (ch == '-')
 	{
 		negative = -1;
 		ch = fgetc(fptr);
+		*position += 1;
 	}
 	if (ch == '0')
 	{
-		if ((ch = fgetc(fptr)) == EOF)
-			return EOF;
+		ch = fgetc(fptr);
+		*position += 1;
+		if (feof(fptr))
+			return FATAL_ERROR;
 		else
 			goto PARSE_CHOICE;
 	}
@@ -48,6 +83,7 @@ int parse_number(FILE *fptr, int *restrict position, int *restrict line, item_t 
 		while (1)
 		{
 			ch = fgetc(fptr);
+			*position += 1;
 			if (ch >= '0' && ch <= '9')
 				result = (result * 10) + (ch - '0');
 			else
@@ -65,13 +101,13 @@ int parse_number(FILE *fptr, int *restrict position, int *restrict line, item_t 
 		}
 		goto STOP_PARSING;
 	}
-	else if (ch == EOF)
+	else if (feof(fptr))
 	{
-		return EOF;
+		return FATAL_ERROR;
 	}
 	else
 	{
-		printf("SyntaxError: Unexpected token %c\n", ch);
+		printf("SyntaxError: Unexpected non-digit token '%c' at line (%d), position (%d)\n", ch, *line, *position);
 		return FATAL_ERROR;
 	}
 
@@ -80,10 +116,11 @@ PARSE_FRACTION:
 	while (1)
 	{
 		ch = fgetc(fptr);
+		*position += 1;
 		if ((check_once == 0) && !(ch >= '0' && ch <= '9'))
 		{
 			check_once = 1;
-			printf("SyntaxError: Unexpected token %c\n", ch);
+			printf("SyntaxError: Unterminated fractional number at line (%d), position (%d)\n", *line, *position);
 			return FATAL_ERROR;
 		}
 		if (ch >= '0' && ch <= '9')
@@ -101,22 +138,28 @@ PARSE_FRACTION:
 		goto PARSE_EXPONENT;
 	goto STOP_PARSING;
 PARSE_EXPONENT:
-	if ((ch = fgetc(fptr)) == EOF)
-		return EOF;
+	ch = fgetc(fptr);
+	*position += 1;
+	if (feof(fptr))
+		return FATAL_ERROR;
 	if (ch == '-' || ch == '+')
 		negative_exp = (ch == '-') ? 1 : 0;
 	else if (ch >= '0' && ch <= '9')
+	{
 		fseek(fptr, -1, SEEK_CUR);
+		*position -= 1;
+	}
 	else
 	{
-		printf("SyntaxError: Unexpected token %c\n", ch);
+		printf("SyntaxError: Exponent part is missing a number at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
 	while (1)
 	{
 		ch = fgetc(fptr);
-		if (ch == EOF)
-			return EOF;
+		*position += 1;
+		if (feof(fptr))
+			return FATAL_ERROR;
 		if (ch >= '0' && ch <= '9')
 		{
 			is_first_digit = 1;
@@ -125,7 +168,7 @@ PARSE_EXPONENT:
 		}
 		else if (!is_first_digit)
 		{
-			printf("SyntaxError: Unexpected token %c\n", ch);
+			printf("SyntaxError: Exponent part is missing a number at line (%d), position (%d)\n", *line, *position);
 			return FATAL_ERROR;
 		}
 		goto STOP_PARSING;
@@ -147,7 +190,11 @@ STOP_PARSING:
 	parent->value = (double *)malloc(sizeof(double));
 	*(double *)parent->value = result;
 
-	fseek(fptr, -1, SEEK_CUR);
+	if (!feof(fptr))
+	{
+		fseek(fptr, -1, SEEK_CUR);
+		*position -= 1;
+	}
 	return ch;
 }
 
@@ -158,21 +205,25 @@ int parse_string(FILE *fptr, int *restrict position, int *restrict line, item_t 
 	uint32_t hexxx2;
 	int str_size = 1;
 
-	parent->value = (char *)malloc(0);
+	parent->type = json_string;
+	parent->value = (char *)malloc(str_size);
 PARSE_NEXT:
-	while ((ch = fgetc(fptr)) != EOF)
+	while (!feof(fptr))
 	{
+		ch = fgetc(fptr);
+		*position += 1;
 		if (ch == '"')
 			return 0;
-
 		for (int i = 0; i < CC_SIZE; i++)
 			if (ch == CONTROL_CHARS[i])
-				return ch;
+			{
+				printf("SyntaxError: Bad control character at line (%d), position (%d)\n", *line, *position);
+				return FATAL_ERROR;
+			}
 		if (ch == '\\')
 		{
-			if ((ch = fgetc(fptr)) == EOF)
-				return EOF;
-
+			ch = fgetc(fptr);
+			*position += 1;
 		PARSE_SOLIDUS_CHAR:
 			switch (ch)
 			{
@@ -201,8 +252,10 @@ PARSE_NEXT:
 
 				for (int i = 0; i < 4; i++)
 				{
-					if ((ch = fgetc(fptr)) == EOF)
-						return EOF;
+					ch = fgetc(fptr);
+					*position += 1;
+					if (feof(fptr))
+						return FATAL_ERROR;
 					if (ch >= '0' && ch <= '9')
 						hexxx = (hexxx << 4) + (ch - '0');
 					else if (ch >= 'a' && ch <= 'f')
@@ -211,27 +264,32 @@ PARSE_NEXT:
 						hexxx = 10 + (hexxx << 4) + (ch - 'A');
 					else
 					{
-						printf("SyntaxError: Unexpected string in JSON\n");
+						printf("SyntaxError: Bad unicode escape at line (%d), position (%d)\n", *line, *position);
 						return FATAL_ERROR;
 					}
 				}
-
 				if (hexxx >= 0xd800 && hexxx <= 0xdbff)
 				{
 					ch = fgetc(fptr);
-					if (ch != '\\') {
+					*position += 1;
+					if (ch != '\\')
+					{
 						fseek(fptr, -1, SEEK_CUR);
+						*position -= 1;
 						goto PARSE_NEXT;
 					}
+
 					ch = fgetc(fptr);
-					if (ch != 'u') {
+					*position += 1;
+					if (ch != 'u')
+					{
 						goto PARSE_SOLIDUS_CHAR;
 					}
-
 					hexxx2 = 0;
 					for (int i = 0; i < 4; ++i)
 					{
 						ch = fgetc(fptr);
+						*position += 1;
 						if (ch >= '0' && ch <= '9')
 							hexxx2 = (hexxx2 << 4) + (ch - '0');
 						else if (ch >= 'a' && ch <= 'f')
@@ -240,7 +298,7 @@ PARSE_NEXT:
 							hexxx2 = 10 + (hexxx2 << 4) + (ch - 'A');
 						else
 						{
-							printf("SyntaxError: Unexpected string in JSON\n");
+							printf("SyntaxError: Bad unicode escape at line (%d), position (%d)\n", *line, *position);
 							return FATAL_ERROR;
 						}
 					}
@@ -277,7 +335,7 @@ PARSE_NEXT:
 				}
 				goto PARSE_NEXT;
 			default:
-				printf("SyntaxError: Unexpected token %c in JSON\n", ch);
+				printf("SyntaxError: Bad escaped character at line (%d), position (%d)\n", *line, *position);
 				return FATAL_ERROR;
 			}
 		}
@@ -287,44 +345,182 @@ PARSE_NEXT:
 		((char *)parent->value)[str_size - 1] = '\0';
 		parent->size = str_size;
 	}
-	if (ch == EOF)
+
+	if (feof(fptr))
 	{
-		puts("SyntaxError: Unexpected end of JSON input");
+		printf("SyntaxError: Unterminated string at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
-	printf("SyntaxError: Unexpected token %c in JSON\n", ch);
+	printf("SyntaxError: Unexpected token '%c' at line (%d), position (%d)\n", ch, *line, *position);
 	return FATAL_ERROR;
 }
-int parse_whitespace(FILE *fptr, int *restrict position, int *restrict line)
+
+int parse_value(FILE *fptr, int *restrict position, int *restrict line, item_t *parent);
+
+int parse_array(FILE *fptr, int *restrict position, int *restrict line, item_t *parent)
+{
+	char returnCode;
+
+	parent->items = (item_t **)malloc(0);
+	parent->size = 0;
+	parent->type = json_array;
+
+	returnCode = parse_whitespace(fptr, position, line);
+	if (feof(fptr))
+	{
+		printf("SyntaxError: Unexpected end of JSON input at line (%d), position (%d)\n", *line, *position);
+		return FATAL_ERROR;
+	}
+	if (returnCode == ']')
+		return 0; // empty array
+	fseek(fptr, -1, SEEK_CUR);
+	*position -= 1;
+
+	parent->size += 1;
+	parent->items = (item_t **)realloc(parent->items, sizeof(item_t **) * parent->size);
+	parent->items[parent->size - 1] = (item_t *)malloc(sizeof(item_t));
+
+	returnCode = parse_value(fptr, position, line, parent->items[parent->size - 1]);
+	if (returnCode == FATAL_ERROR)
+	{
+		return FATAL_ERROR;
+	}
+	if (returnCode == ']')
+		return 0;
+	else if (feof(fptr))
+	{
+		printf("SyntaxError: End of data when ',' or ']' was expected at line (%d), position (%d)\n", *line, *position);
+		return FATAL_ERROR;
+	}
+	else if (returnCode != ',')
+	{
+		printf("SyntaxError: Expected ',' or ']' after array element at line (%d), position (%d)\n", *line, *position);
+		return FATAL_ERROR;
+	}
+	while (returnCode == ',')
+	{
+		parent->size += 1;
+		parent->items = (item_t **)realloc(parent->items, sizeof(item_t **) * parent->size);
+		parent->items[parent->size - 1] = (item_t *)malloc(sizeof(item_t));
+		returnCode = parse_value(fptr, position, line, parent->items[parent->size - 1]);
+	}
+	if (returnCode == FATAL_ERROR)
+	{
+		return FATAL_ERROR;
+	}
+	if (returnCode == ']')
+	{
+		return 0;
+	}
+	printf("SyntaxError: End of data when ',' or ']' was expected at line (%d), position (%d)\n", *line, *position);
+	return FATAL_ERROR;
+}
+
+int parse_object(FILE *fptr, int *restrict position, int *restrict line, item_t *parent)
+{
+	char returnCode;
+
+	parent->items = (item_t **)malloc(0);
+	parent->type = json_object;
+	parent->size = 0;
+
+	int comma_before = 0;
+PARSE_OBJECT:
+	returnCode = parse_whitespace(fptr, position, line);
+	if (feof(fptr))
+	{
+		printf("SyntaxError: Unexpected end of JSON input at line (%d), position (%d)\n", *line, *position);
+		return FATAL_ERROR;
+	}
+	if (comma_before && returnCode != '"')
+	{
+		printf("SyntaxError: Expected double-quoted property name at line (%d), position (%d)\n", *line, *position);
+		return FATAL_ERROR;
+	}
+	if (returnCode == '}')
+		return 0; // empty object
+	if (returnCode != '"' && returnCode != '}')
+	{
+		printf("SyntaxError: Expected property name or '}' at line (%d), position (%d)\n", *line, *position);
+		return FATAL_ERROR;
+	}
+	parent->size += 2; // there should be value for each key
+	parent->items = (item_t **)realloc(parent->items, sizeof(item_t **) * parent->size);
+	parent->items[parent->size - 2] = (item_t *)malloc(sizeof(item_t));
+	parent->items[parent->size - 2]->type = json_string;
+	if (parse_string(fptr, position, line, parent->items[parent->size - 2]) == FATAL_ERROR)
+	{
+		parent->size -= 1;
+		return FATAL_ERROR;
+	}
+	returnCode = parse_whitespace(fptr, position, line);
+	if (returnCode == FATAL_ERROR)
+	{
+		parent->size -= 1;
+		return FATAL_ERROR;
+	}
+	if (feof(fptr))
+	{
+		printf("SyntaxError: End of data after property name when ':' was expected at line (%d), position (%d)\n", *line, *position);
+		parent->size -= 1;
+		return FATAL_ERROR;
+	}
+	if (returnCode != ':')
+	{
+		printf("SyntaxError: Expected ':' after property name at line (%d), position (%d)\n", *line, *position);
+		parent->size -= 1;
+		return FATAL_ERROR;
+	}
+	parent->items[parent->size - 1] = (item_t *)malloc(sizeof(item_t));
+	returnCode = parse_value(fptr, position, line, parent->items[parent->size - 1]);
+	if (returnCode == FATAL_ERROR)
+		return FATAL_ERROR;
+
+	if (returnCode == ',')
+	{
+		comma_before = 1;
+		goto PARSE_OBJECT;
+	}
+	if (feof(fptr))
+	{
+		printf("SyntaxError: Unexpected end of JSON input at line (%d), position (%d)\n", *line, *position);
+		return FATAL_ERROR;
+	}
+
+	if (returnCode != '}')
+	{
+		printf("SyntaxError: Unexpected token %c at line (%d), position (%d)\n", returnCode, *line, *position);
+		return FATAL_ERROR;
+	}
+	return 0;
+}
+
+int parse_bool(FILE *fptr, int *restrict position, int *restrict line, char *bool_str)
 {
 	char ch;
-	while ((ch = fgetc(fptr)) != EOF)
+	*position -= 1;
+	size_t str_len = strlen(bool_str);
+	for (size_t i = 1; i < str_len; ++i)
 	{
-		switch (ch)
+		ch = fgetc(fptr);
+		*position += 1;
+		if (ch == bool_str[i])
+			continue;
+		else if (feof(fptr))
 		{
-		case '\n':
-			*line += 1;
-			*position = 0;
-			break;
-		case '\t':
-			*position += 1;
-			break;
-		case ' ':
-		case '\r':
-			*position += 1;
-			break;
-		default:
-			return ch;
+			printf("SyntaxError: Unexpected end of JSON input at line (%d), position (%d)\n", *line, *position);
+			return FATAL_ERROR;
+		}
+		else
+		{
+			printf("SyntaxError: Expected '%c' instead of '%c' at line (%d), position (%d)\n", bool_str[i], ch, *line, *position);
+			return FATAL_ERROR;
 		}
 	}
-	return EOF;
+	return 0;
 }
 int parse_value(FILE *fptr, int *restrict position, int *restrict line, item_t *parent)
 {
-	int size_bool_str;
-	char bool_str[6];
-
-	char returnCode;
 	char ch = parse_whitespace(fptr, position, line);
 	switch (ch)
 	{
@@ -339,167 +535,44 @@ int parse_value(FILE *fptr, int *restrict position, int *restrict line, item_t *
 	case '7':
 	case '8':
 	case '9':
-		parent->type = json_number;
-		returnCode = parse_number(fptr, position, line, parent);
-
-		if (returnCode == FATAL_ERROR)
+		if (parse_number(fptr, position, line, parent) == FATAL_ERROR)
 			return FATAL_ERROR;
-		if (returnCode == EOF)
-			return EOF;
-		return parse_whitespace(fptr, position, line);
+		break;
 	case '"':
-		parent->type = json_string;
-		returnCode = parse_string(fptr, position, line, parent);
-		if (returnCode == FATAL_ERROR)
+		if (parse_string(fptr, position, line, parent) == FATAL_ERROR)
 			return FATAL_ERROR;
-		return parse_whitespace(fptr, position, line);
+		break;
 	case '{':
-		parent->items = (item_t **)malloc(0);
-		parent->type = json_object;
-		parent->size = 0;
-
-		int comma_before = 0;
-	PARSE_OBJECT:
-		returnCode = parse_whitespace(fptr, position, line);
-		if (returnCode == EOF)
-		{
-			puts("SyntaxError: Unexpected end of JSON input");
+		if (parse_object(fptr, position, line, parent) == FATAL_ERROR)
 			return FATAL_ERROR;
-		}
-		if (comma_before && returnCode != '"')
-		{
-			printf("SyntaxError: Unexpected token %c\n", returnCode);
-			return FATAL_ERROR;
-		}
-		if (returnCode == '}')
-			return parse_whitespace(fptr, position, line); // empty object
-		if (returnCode != '"')
-		{
-			printf("SyntaxError: Unexpected token %c\n", returnCode);
-			return FATAL_ERROR;
-		}
-		parent->size += 2; // there should be value for each key
-		parent->items = (item_t **)realloc(parent->items, sizeof(item_t **) * parent->size);
-		parent->items[parent->size - 2] = (item_t *)malloc(sizeof(item_t));
-		parent->items[parent->size - 2]->type = json_string;
-		returnCode = parse_string(fptr, position, line, parent->items[parent->size - 2]);
-		if (returnCode == FATAL_ERROR)
-			return FATAL_ERROR;
-		returnCode = parse_whitespace(fptr, position, line);
-		if (returnCode == FATAL_ERROR)
-			return FATAL_ERROR;
-		if (returnCode == EOF)
-		{
-			puts("SyntaxError: Unexpected end of JSON input");
-			return EOF;
-		}
-		if (returnCode != ':')
-			return returnCode;
-
-		parent->items[parent->size - 1] = (item_t *)malloc(sizeof(item_t));
-		returnCode = parse_value(fptr, position, line, parent->items[parent->size - 1]);
-		if (returnCode == FATAL_ERROR)
-			return FATAL_ERROR;
-		if (returnCode == ',')
-		{
-			comma_before = 1;
-			goto PARSE_OBJECT;
-		}
-		if (returnCode == EOF)
-		{
-			puts("SyntaxError: Unexpected end of JSON input");
-			return FATAL_ERROR;
-		}
-		if (returnCode != '}')
-		{
-			printf("SyntaxError: Unexpected token %c\n", returnCode);
-			return FATAL_ERROR;
-		}
-		return parse_whitespace(fptr, position, line);
+		break;
 	case '[': // parse_array
-		parent->items = (item_t **)malloc(0);
-		parent->size = 0;
-		parent->type = json_array;
-
-		returnCode = parse_whitespace(fptr, position, line);
-		if (returnCode == EOF)
-		{
-			puts("SyntaxError: Unexpected end of JSON input");
+		if (parse_array(fptr, position, line, parent) == FATAL_ERROR)
 			return FATAL_ERROR;
-		}
-		if (returnCode == ']')
-			return parse_whitespace(fptr, position, line); // empty array
-		fseek(fptr, -1, SEEK_CUR);
-
-		parent->size += 1;
-		parent->items = (item_t **)realloc(parent->items, sizeof(item_t **) * parent->size);
-		parent->items[parent->size - 1] = (item_t *)malloc(sizeof(item_t));
-
-		returnCode = parse_value(fptr, position, line, parent->items[parent->size - 1]);
-		if (returnCode == FATAL_ERROR)
-			return FATAL_ERROR;
-		if (returnCode == ']')
-			return parse_whitespace(fptr, position, line);
-		else if (returnCode != ',')
-		{
-			printf("SyntaxError: Unexpected token %c\n", returnCode);
-			return FATAL_ERROR;
-		}
-		while (returnCode != ']' && returnCode == ',')
-		{
-			parent->size += 1;
-			parent->items = (item_t **)realloc(parent->items, sizeof(item_t **) * parent->size);
-			parent->items[parent->size - 1] = (item_t *)malloc(sizeof(item_t));
-			returnCode = parse_value(fptr, position, line, parent->items[parent->size - 1]);
-		}
-		if (returnCode == FATAL_ERROR)
-			return FATAL_ERROR;
-		if (returnCode != EOF)
-			return parse_whitespace(fptr, position, line);
-
-		puts("SyntaxError: Unexpected end of JSON input");
-		return FATAL_ERROR;
+		break;
 	case 't':
-		size_bool_str = sizeof("true");
-		strcpy(bool_str, "true");
-		goto PARSE_BOOLEAN_STR;
+		if (parse_bool(fptr, position, line, "true") == FATAL_ERROR)
+			return FATAL_ERROR;
+		parent->type = json_true;
+		break;
 	case 'n':
-		size_bool_str = sizeof("null");
-		strcpy(bool_str, "null");
-		goto PARSE_BOOLEAN_STR;
+		if (parse_bool(fptr, position, line, "null") == FATAL_ERROR)
+			return FATAL_ERROR;
+		parent->type = json_null;
+		break;
 	case 'f':
-		size_bool_str = sizeof("false");
-		strcpy(bool_str, "false");
-
-	PARSE_BOOLEAN_STR:
-		for (int i = 1; i < size_bool_str - 1; ++i)
-		{
-			ch = fgetc(fptr);
-			if (ch == bool_str[i])
-				continue;
-			else if (ch == EOF)
-			{
-				puts("SyntaxError: Unexpected end of JSON input");
-				return FATAL_ERROR;
-			}
-			else
-			{
-				printf("Error: Expected '%c' instead of '%c'\n", bool_str[i], ch);
-				return FATAL_ERROR;
-			}
-		}
-		if (strcmp(bool_str, "true") == 0)
-			parent->type = json_true;
-		else if (strcmp(bool_str, "null") == 0)
-			parent->type = json_null;
-		else
-			parent->type = json_false;
-
-		return parse_whitespace(fptr, position, line);
+		if (parse_bool(fptr, position, line, "false") == FATAL_ERROR)
+			return FATAL_ERROR;
+		parent->type = json_false;
+		break;
 	default:
-		printf("SyntaxError: Unexpected token '%c'\n", ch);
+		if (feof(fptr))
+			printf("SyntaxError: Unexpected end of data at line (%d), position (%d)\n", *line, *position);
+		else
+			printf("SyntaxError: Unexpected token '%c' at line (%d), position (%d)\n", ch, *line, *position);
 		return FATAL_ERROR;
 	}
+	return parse_whitespace(fptr, position, line);
 }
 
 int print_all(item_t *head, int indent_s, size_t depth)
@@ -638,9 +711,10 @@ int parse_json(char *str)
 		int position = 0, line = 1, returnCode;
 
 		returnCode = parse_value(fptr, &position, &line, head);
-		if (returnCode != FATAL_ERROR && returnCode != EOF)
+		if (!feof(fptr) && returnCode != FATAL_ERROR)
+			printf("Syntax error: Unexpected non-whitespace character after JSON data at line (%d), position (%d)\n", line, position);
+		else if (returnCode == FATAL_ERROR)
 		{
-			printf("SyntaxError: Unexpected token '%c'\n", returnCode);
 		}
 		else
 		{

@@ -1,2 +1,4 @@
 all:
-	gcc -Wall -g -o main main.c
+	gcc -Wall -Wextra -Werror -Wpedantic -std=c99 -o main main.c
+	
+#-Werror -Wpedantic
