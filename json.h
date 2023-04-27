@@ -1,9 +1,29 @@
 #define FATAL_ERROR -2
 
-enum json_types {json_false,json_true,json_null,json_object,json_array,json_string,json_number};
+static const enum json_types {
+    json_false,
+    json_true,
+    json_null,
+    json_object,
+    json_array,
+    json_string,
+    json_number
+} __attribute__ ((__packed__)) json_types;
 
-static const int CC_SIZE = 10;
-static const int CONTROL_CHARS[] = {0, 7, 8, 9, 10, 11, 12, 13, 26, 27}; // see ascii table
+static const enum control_chars {
+    NUL = 0,
+    BEL = 7,
+    BS  = 8,
+    TAB = 9,
+    LF  = 10,
+    VT  = 11,
+    FF  = 12,
+    CR  = 13,
+    SUB = 26,
+    ESC = 27
+} __attribute__ ((__packed__)) control_chars;
+
+// transcode depends on length of utf char
 static const unsigned char fByte[7] = {0x00, 0x00, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc};
 
 typedef struct Item {
@@ -14,3 +34,14 @@ typedef struct Item {
    
     struct Item **items; //for both arrays and objects
 } item_t;
+
+int parse_whitespace(FILE *fptr, int *restrict position, int *restrict line);
+int parse_number(FILE *fptr, int *restrict position, int *restrict line, item_t *parent);
+int parse_value(FILE *fptr, int *restrict position, int *restrict line, item_t *parent);
+int parse_array(FILE *fptr, int *restrict position, int *restrict line, item_t *parent);
+int parse_object(FILE *fptr, int *restrict position, int *restrict line, item_t *parent);
+int parse_bool(FILE *fptr, int *restrict position, int *restrict line, char *bool_str);
+int parse_json(char *str);
+
+int print_all(item_t *head, int indent_s, size_t depth);
+int free_everything(item_t *Node);

@@ -4,9 +4,9 @@
 #include <stdint.h>
 #include <string.h>
 
-#define min(X, Y) (((X) < (Y)) ? (X) : (Y))
-
 #include "json.h"
+
+#define is_digit(c) ((unsigned)((c) - '0') < 10)
 
 double pow_n(int N, int n)
 {
@@ -22,23 +22,20 @@ int parse_whitespace(FILE *fptr, int *restrict position, int *restrict line)
 	while (1)
 	{
 		ch = fgetc(fptr);
+		*position += 1;
+
 		switch (ch)
 		{
 		case '\n':
 			*line += 1;
 			*position = 0;
-			break;
-		case '\t':
-			*position += 1;
-			break;
+			__attribute__((fallthrough));
 		case ' ':
+		case '\t':
 		case '\r':
-			*position += 1;
-			break;
-		default:
-			*position += 1;
-			return ch;
+			continue;
 		}
+		return ch;
 	}
 	return FATAL_ERROR;
 }
@@ -77,14 +74,14 @@ int parse_number(FILE *fptr, int *restrict position, int *restrict line, item_t 
 		else
 			goto PARSE_CHOICE;
 	}
-	else if (ch >= '1' && ch <= '9')
+	else if (is_digit(ch))
 	{
 		result = (result * 10) + (ch - '0');
 		while (1)
 		{
 			ch = fgetc(fptr);
 			*position += 1;
-			if (ch >= '0' && ch <= '9')
+			if (is_digit(ch))
 				result = (result * 10) + (ch - '0');
 			else
 				break;
@@ -92,51 +89,45 @@ int parse_number(FILE *fptr, int *restrict position, int *restrict line, item_t 
 		result *= negative;
 	PARSE_CHOICE:
 		if (ch == '.')
-		{
 			goto PARSE_FRACTION;
-		}
 		if (ch == 'e' || ch == 'E')
-		{
 			goto PARSE_EXPONENT;
-		}
 		goto STOP_PARSING;
 	}
 	else if (feof(fptr))
-	{
 		return FATAL_ERROR;
-	}
 	else
 	{
-		printf("SyntaxError: Unexpected non-digit token '%c' at line (%d), position (%d)\n", ch, *line, *position);
+		fprintf(stderr, "SyntaxError: Unexpected non-digit token '%c' at line (%d), position (%d)\n", ch, *line, *position);
 		return FATAL_ERROR;
 	}
 
 PARSE_FRACTION:
 	check_once = 0;
+
 	while (1)
 	{
 		ch = fgetc(fptr);
 		*position += 1;
-		if ((check_once == 0) && !(ch >= '0' && ch <= '9'))
-		{
-			check_once = 1;
-			printf("SyntaxError: Unterminated fractional number at line (%d), position (%d)\n", *line, *position);
-			return FATAL_ERROR;
-		}
-		if (ch >= '0' && ch <= '9')
+
+		if (is_digit(ch))
 		{
 			fraction = (fraction * 10) + (ch - '0');
 			frac_digits += 1;
 			check_once = 1;
+			continue;
 		}
-		else
+		else if (!check_once)
 		{
-			break;
+			fprintf(stderr, "SyntaxError: Unterminated fractional number at line (%d), position (%d)\n", *line, *position);
+			return FATAL_ERROR;
 		}
+		else if (ch != 'e' || ch != 'E')
+		{
+			goto STOP_PARSING;
+		}
+		break;//goto PARSE_EXPONENT;
 	}
-	if (ch == 'e' || ch == 'E')
-		goto PARSE_EXPONENT;
-	goto STOP_PARSING;
 PARSE_EXPONENT:
 	ch = fgetc(fptr);
 	*position += 1;
@@ -144,14 +135,14 @@ PARSE_EXPONENT:
 		return FATAL_ERROR;
 	if (ch == '-' || ch == '+')
 		negative_exp = (ch == '-') ? 1 : 0;
-	else if (ch >= '0' && ch <= '9')
+	else if (is_digit(ch))
 	{
 		fseek(fptr, -1, SEEK_CUR);
 		*position -= 1;
 	}
 	else
 	{
-		printf("SyntaxError: Exponent part is missing a number at line (%d), position (%d)\n", *line, *position);
+		fprintf(stderr, "SyntaxError: Exponent part is missing a number at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
 	while (1)
@@ -160,7 +151,7 @@ PARSE_EXPONENT:
 		*position += 1;
 		if (feof(fptr))
 			return FATAL_ERROR;
-		if (ch >= '0' && ch <= '9')
+		if (is_digit(ch))
 		{
 			is_first_digit = 1;
 			exponent = (exponent * 10) + (ch - '0');
@@ -168,7 +159,7 @@ PARSE_EXPONENT:
 		}
 		else if (!is_first_digit)
 		{
-			printf("SyntaxError: Exponent part is missing a number at line (%d), position (%d)\n", *line, *position);
+			fprintf(stderr, "SyntaxError: Exponent part is missing a number at line (%d), position (%d)\n", *line, *position);
 			return FATAL_ERROR;
 		}
 		goto STOP_PARSING;
@@ -214,12 +205,23 @@ PARSE_NEXT:
 		*position += 1;
 		if (ch == '"')
 			return 0;
-		for (int i = 0; i < CC_SIZE; i++)
-			if (ch == CONTROL_CHARS[i])
-			{
-				printf("SyntaxError: Bad control character at line (%d), position (%d)\n", *line, *position);
-				return FATAL_ERROR;
-			}
+
+		switch (ch) // check if ch is a control character
+		{
+		case NUL:
+		case BEL:
+		case BS:
+		case TAB:
+		case LF:
+		case VT:
+		case FF:
+		case CR:
+		case SUB:
+		case ESC:
+			fprintf(stderr, "SyntaxError: Bad control character at line (%d), position (%d)\n", *line, *position);
+			return FATAL_ERROR;
+		}
+
 		if (ch == '\\')
 		{
 			ch = fgetc(fptr);
@@ -256,7 +258,7 @@ PARSE_NEXT:
 					*position += 1;
 					if (feof(fptr))
 						return FATAL_ERROR;
-					if (ch >= '0' && ch <= '9')
+					if (is_digit(ch))
 						hexxx = (hexxx << 4) + (ch - '0');
 					else if (ch >= 'a' && ch <= 'f')
 						hexxx = 10 + (hexxx << 4) + (ch - 'a');
@@ -264,7 +266,7 @@ PARSE_NEXT:
 						hexxx = 10 + (hexxx << 4) + (ch - 'A');
 					else
 					{
-						printf("SyntaxError: Bad unicode escape at line (%d), position (%d)\n", *line, *position);
+						fprintf(stderr, "SyntaxError: Bad unicode escape at line (%d), position (%d)\n", *line, *position);
 						return FATAL_ERROR;
 					}
 				}
@@ -298,7 +300,7 @@ PARSE_NEXT:
 							hexxx2 = 10 + (hexxx2 << 4) + (ch - 'A');
 						else
 						{
-							printf("SyntaxError: Bad unicode escape at line (%d), position (%d)\n", *line, *position);
+							fprintf(stderr, "SyntaxError: Bad unicode escape at line (%d), position (%d)\n", *line, *position);
 							return FATAL_ERROR;
 						}
 					}
@@ -335,7 +337,7 @@ PARSE_NEXT:
 				}
 				goto PARSE_NEXT;
 			default:
-				printf("SyntaxError: Bad escaped character at line (%d), position (%d)\n", *line, *position);
+				fprintf(stderr, "SyntaxError: Bad escaped character at line (%d), position (%d)\n", *line, *position);
 				return FATAL_ERROR;
 			}
 		}
@@ -348,14 +350,12 @@ PARSE_NEXT:
 
 	if (feof(fptr))
 	{
-		printf("SyntaxError: Unterminated string at line (%d), position (%d)\n", *line, *position);
+		fprintf(stderr, "SyntaxError: Unterminated string at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
-	printf("SyntaxError: Unexpected token '%c' at line (%d), position (%d)\n", ch, *line, *position);
+	fprintf(stderr, "SyntaxError: Unexpected token '%c' at line (%d), position (%d)\n", ch, *line, *position);
 	return FATAL_ERROR;
 }
-
-int parse_value(FILE *fptr, int *restrict position, int *restrict line, item_t *parent);
 
 int parse_array(FILE *fptr, int *restrict position, int *restrict line, item_t *parent)
 {
@@ -368,7 +368,7 @@ int parse_array(FILE *fptr, int *restrict position, int *restrict line, item_t *
 	returnCode = parse_whitespace(fptr, position, line);
 	if (feof(fptr))
 	{
-		printf("SyntaxError: Unexpected end of JSON input at line (%d), position (%d)\n", *line, *position);
+		fprintf(stderr, "SyntaxError: Unexpected end of JSON input at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
 	if (returnCode == ']')
@@ -389,12 +389,12 @@ int parse_array(FILE *fptr, int *restrict position, int *restrict line, item_t *
 		return 0;
 	else if (feof(fptr))
 	{
-		printf("SyntaxError: End of data when ',' or ']' was expected at line (%d), position (%d)\n", *line, *position);
+		fprintf(stderr, "SyntaxError: End of data when ',' or ']' was expected at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
 	else if (returnCode != ',')
 	{
-		printf("SyntaxError: Expected ',' or ']' after array element at line (%d), position (%d)\n", *line, *position);
+		fprintf(stderr, "SyntaxError: Expected ',' or ']' after array element at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
 	while (returnCode == ',')
@@ -412,7 +412,7 @@ int parse_array(FILE *fptr, int *restrict position, int *restrict line, item_t *
 	{
 		return 0;
 	}
-	printf("SyntaxError: End of data when ',' or ']' was expected at line (%d), position (%d)\n", *line, *position);
+	fprintf(stderr, "SyntaxError: End of data when ',' or ']' was expected at line (%d), position (%d)\n", *line, *position);
 	return FATAL_ERROR;
 }
 
@@ -429,19 +429,19 @@ PARSE_OBJECT:
 	returnCode = parse_whitespace(fptr, position, line);
 	if (feof(fptr))
 	{
-		printf("SyntaxError: Unexpected end of JSON input at line (%d), position (%d)\n", *line, *position);
+		fprintf(stderr, "SyntaxError: Unexpected end of JSON input at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
 	if (comma_before && returnCode != '"')
 	{
-		printf("SyntaxError: Expected double-quoted property name at line (%d), position (%d)\n", *line, *position);
+		fprintf(stderr, "SyntaxError: Expected double-quoted property name at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
 	if (returnCode == '}')
 		return 0; // empty object
 	if (returnCode != '"' && returnCode != '}')
 	{
-		printf("SyntaxError: Expected property name or '}' at line (%d), position (%d)\n", *line, *position);
+		fprintf(stderr, "SyntaxError: Expected property name or '}' at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
 	parent->size += 2; // there should be value for each key
@@ -461,13 +461,13 @@ PARSE_OBJECT:
 	}
 	if (feof(fptr))
 	{
-		printf("SyntaxError: End of data after property name when ':' was expected at line (%d), position (%d)\n", *line, *position);
+		fprintf(stderr, "SyntaxError: End of data after property name when ':' was expected at line (%d), position (%d)\n", *line, *position);
 		parent->size -= 1;
 		return FATAL_ERROR;
 	}
 	if (returnCode != ':')
 	{
-		printf("SyntaxError: Expected ':' after property name at line (%d), position (%d)\n", *line, *position);
+		fprintf(stderr, "SyntaxError: Expected ':' after property name at line (%d), position (%d)\n", *line, *position);
 		parent->size -= 1;
 		return FATAL_ERROR;
 	}
@@ -483,13 +483,13 @@ PARSE_OBJECT:
 	}
 	if (feof(fptr))
 	{
-		printf("SyntaxError: Unexpected end of JSON input at line (%d), position (%d)\n", *line, *position);
+		fprintf(stderr, "SyntaxError: Unexpected end of JSON input at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
 
 	if (returnCode != '}')
 	{
-		printf("SyntaxError: Unexpected token %c at line (%d), position (%d)\n", returnCode, *line, *position);
+		fprintf(stderr, "SyntaxError: Unexpected token %c at line (%d), position (%d)\n", returnCode, *line, *position);
 		return FATAL_ERROR;
 	}
 	return 0;
@@ -508,12 +508,12 @@ int parse_bool(FILE *fptr, int *restrict position, int *restrict line, char *boo
 			continue;
 		else if (feof(fptr))
 		{
-			printf("SyntaxError: Unexpected end of JSON input at line (%d), position (%d)\n", *line, *position);
+			fprintf(stderr, "SyntaxError: Unexpected end of JSON input at line (%d), position (%d)\n", *line, *position);
 			return FATAL_ERROR;
 		}
 		else
 		{
-			printf("SyntaxError: Expected '%c' instead of '%c' at line (%d), position (%d)\n", bool_str[i], ch, *line, *position);
+			fprintf(stderr, "SyntaxError: Expected '%c' instead of '%c' at line (%d), position (%d)\n", bool_str[i], ch, *line, *position);
 			return FATAL_ERROR;
 		}
 	}
@@ -567,9 +567,9 @@ int parse_value(FILE *fptr, int *restrict position, int *restrict line, item_t *
 		break;
 	default:
 		if (feof(fptr))
-			printf("SyntaxError: Unexpected end of data at line (%d), position (%d)\n", *line, *position);
+			fprintf(stderr, "SyntaxError: Unexpected end of data at line (%d), position (%d)\n", *line, *position);
 		else
-			printf("SyntaxError: Unexpected token '%c' at line (%d), position (%d)\n", ch, *line, *position);
+			fprintf(stderr, "SyntaxError: Unexpected token '%c' at line (%d), position (%d)\n", ch, *line, *position);
 		return FATAL_ERROR;
 	}
 	return parse_whitespace(fptr, position, line);
@@ -606,11 +606,11 @@ int print_all(item_t *head, int indent_s, size_t depth)
 		printf("null");
 		break;
 	case json_array:
-		printf("[");
+		putchar('[');
 		if (head->size)
 		{
 			depth++;
-			printf("\n");
+			putchar('\n');
 			for (size_t i = 0; i < depth; ++i)
 				printf("%s", space);
 		}
@@ -625,7 +625,7 @@ int print_all(item_t *head, int indent_s, size_t depth)
 			{
 				depth--;
 			}
-			printf("\n");
+			putchar('\n');
 			for (size_t i = 0; i < depth; ++i)
 				printf("%s", space);
 		}
@@ -645,17 +645,17 @@ int print_all(item_t *head, int indent_s, size_t depth)
 			print_all(head->items[i], indent_s, depth);
 			if ((i != head->size - 1) && (i % 2))
 			{
-				printf(",\n");
+				puts(",");
 				for (size_t i = 0; i < depth; ++i)
 					printf("%s", space);
 			}
 			else if ((i != head->size - 1) && !(i % 2))
 			{
-				printf(":");
+				putchar(':');
 			}
 			else if (i == head->size - 1)
 			{
-				printf("\n");
+				putchar('\n');
 				depth--;
 				for (size_t i = 0; i < depth; ++i)
 					printf("%s", space);
@@ -665,7 +665,7 @@ int print_all(item_t *head, int indent_s, size_t depth)
 				depth--;
 			}
 		}
-		printf("}");
+		putchar('}');
 		break;
 	default:
 		puts("else");
@@ -712,7 +712,7 @@ int parse_json(char *str)
 
 		returnCode = parse_value(fptr, &position, &line, head);
 		if (!feof(fptr) && returnCode != FATAL_ERROR)
-			printf("Syntax error: Unexpected non-whitespace character after JSON data at line (%d), position (%d)\n", line, position);
+			fprintf(stderr, "Syntax error: Unexpected non-whitespace character after JSON data at line (%d), position (%d)\n", line, position);
 		else if (returnCode == FATAL_ERROR)
 		{
 		}
@@ -733,14 +733,14 @@ int main(int argc, char *argv[])
 {
 	if (argc == 1)
 	{
-		printf("Error: there is no file to parse.\n");
+		fprintf(stderr, "Error: there is no file to parse.\n");
 		return 1;
 	}
 	printf("File -- %s\n\n", argv[argc - 1]);
 
 	if (parse_json(argv[1]))
 	{
-		printf("Error: file cannot be accessed.\n");
+		fprintf(stderr, "Error: file cannot be accessed.\n");
 		return 1;
 	}
 	return 0;
