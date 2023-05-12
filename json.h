@@ -1,6 +1,9 @@
 #define FATAL_ERROR -2
+#define LAST_ITEM   0x10
+#define EMPTY_ITEM  0x20
 
 static const enum json_types {
+    json_undefined,
     json_false,
     json_true,
     json_null,
@@ -27,12 +30,8 @@ static const enum control_chars {
 static const unsigned char fByte[7] = {0x00, 0x00, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc};
 
 typedef struct Item {
-    int_fast8_t type;
-    size_t size; //number of children, x2 in objects (key:pair)
-    
+    int8_t type;
     void *value;
-   
-    struct Item **items; //for both arrays and objects
 } item_t;
 
 int parse_whitespace(FILE *fptr, int *restrict position, int *restrict line);
