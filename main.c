@@ -7,8 +7,9 @@
 #include "json.h"
 
 #define is_digit(c) ((unsigned)((c) - '0') < 10)
+#define min(a,b) (((a) < (b)) ? (a) : (b))
 
-double pow_n(int N, int n)
+static inline double pow_n(int N, int n)
 {
 	N <<= n;
 	while (n--)
@@ -40,18 +41,16 @@ int parse_whitespace(FILE *fptr, int *restrict position, int *restrict line)
 	return FATAL_ERROR;
 }
 
-int parse_number(FILE *fptr, int *restrict position, int *restrict line, item_t *parent)
+static int parse_number(FILE *fptr, int *restrict position, int *restrict line, item_t *parent)
 {
 	char ch;
-	int check_once;
 
 	int negative = 1; // 1 or -1
 	int negative_exp = 0;
-	double result = 0;
-	double fraction = 0;
 	int exponent = 0;
 	int frac_digits = -1;
-	int is_first_digit = 0;
+	double result = 0;
+	double fraction = 0;
 
 	parent->type = json_number;
 	fseek(fptr, -1, SEEK_CUR);
@@ -65,34 +64,20 @@ int parse_number(FILE *fptr, int *restrict position, int *restrict line, item_t 
 		ch = fgetc(fptr);
 		*position += 1;
 	}
-	if (ch == '0')
+	if (is_digit(ch) && ch != '0') 
+	{
+		while (is_digit(ch)) {
+			result = (result * 10) + (ch - '0');
+			ch = fgetc(fptr);
+			*position += 1;
+		}	
+	}
+	else if (ch == '0') 
 	{
 		ch = fgetc(fptr);
 		*position += 1;
 		if (feof(fptr))
 			return FATAL_ERROR;
-		else
-			goto PARSE_CHOICE;
-	}
-	else if (is_digit(ch))
-	{
-		result = (result * 10) + (ch - '0');
-		while (1)
-		{
-			ch = fgetc(fptr);
-			*position += 1;
-			if (is_digit(ch))
-				result = (result * 10) + (ch - '0');
-			else
-				break;
-		};
-		result *= negative;
-	PARSE_CHOICE:
-		if (ch == '.')
-			goto PARSE_FRACTION;
-		if (ch == 'e' || ch == 'E')
-			goto PARSE_EXPONENT;
-		goto STOP_PARSING;
 	}
 	else if (feof(fptr))
 		return FATAL_ERROR;
@@ -101,84 +86,58 @@ int parse_number(FILE *fptr, int *restrict position, int *restrict line, item_t 
 		fprintf(stderr, "SyntaxError: Unexpected non-digit token '%c' at line (%d), position (%d)\n", ch, *line, *position);
 		return FATAL_ERROR;
 	}
+	if (ch == 'e' || ch == 'E')
+		goto PARSE_EXPONENT;
+	if (ch != '.')
+		goto PARSE_STOP;
 
-PARSE_FRACTION:
-	check_once = 0;
+	// parse_fraction
+	ch = fgetc(fptr);
+	*position += 1;
+	if (!is_digit(ch)) {
+		fprintf(stderr, "SyntaxError: Unterminated fractional number at line (%d), position (%d)\n", *line, *position);
+		return FATAL_ERROR;
+	}
+	while (is_digit(ch)) {
+		fraction = (fraction * 10) + (ch - '0');
+		frac_digits += 1;
 
-	while (1)
-	{
 		ch = fgetc(fptr);
 		*position += 1;
-
-		if (is_digit(ch))
-		{
-			fraction = (fraction * 10) + (ch - '0');
-			frac_digits += 1;
-			check_once = 1;
-			continue;
-		}
-		else if (!check_once)
-		{
-			fprintf(stderr, "SyntaxError: Unterminated fractional number at line (%d), position (%d)\n", *line, *position);
-			return FATAL_ERROR;
-		}
-		else if (ch != 'e' && ch != 'E')
-		{
-			goto STOP_PARSING;
-		}
-		
-		break;//goto PARSE_EXPONENT;
-	}
+	};
+	if (ch != 'e' && ch != 'E')
+		goto PARSE_STOP;
 PARSE_EXPONENT:
 	ch = fgetc(fptr);
 	*position += 1;
 	if (feof(fptr))
 		return FATAL_ERROR;
-	if (ch == '-' || ch == '+')
-		negative_exp = (ch == '-') ? 1 : 0;
-	else if (is_digit(ch))
-	{
-		fseek(fptr, -1, SEEK_CUR);
-		*position -= 1;
+	if (ch == '-' || ch == '+') {
+		negative_exp = ch - '+';
+		ch = fgetc(fptr);
+		*position += 1;
 	}
-	else
+	if (!is_digit(ch))
 	{
 		fprintf(stderr, "SyntaxError: Exponent part is missing a number at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
-	while (1)
+	while (is_digit(ch))
 	{
+		exponent = (exponent * 10) + (ch - '0');
 		ch = fgetc(fptr);
 		*position += 1;
-		if (feof(fptr))
-			return FATAL_ERROR;
-		if (is_digit(ch))
-		{
-			is_first_digit = 1;
-			exponent = (exponent * 10) + (ch - '0');
-			continue;
-		}
-		else if (!is_first_digit)
-		{
-			fprintf(stderr, "SyntaxError: Exponent part is missing a number at line (%d), position (%d)\n", *line, *position);
-			return FATAL_ERROR;
-		}
-		break; //goto STOP_PARSING;
 	}
 
-STOP_PARSING:
+PARSE_STOP:
+	frac_digits = min(frac_digits, FLOAT_DIGITS);
 	if (frac_digits > -1)
-	{
-		result += ((fraction / pow_n(10, frac_digits)) * negative);
-	}
-	if (negative_exp && exponent > 0)
-	{
-		result = result / pow_n(10, exponent - 1);
-	}
-	else if (!negative_exp && exponent > 0)
-	{
-		result = pow_n(result, exponent);
-	}
+		result += (fraction / pow_n(10, frac_digits));
+	exponent = min(exponent, FLOAT_DIGITS);
+	if (exponent)
+		result = (negative_exp) ? (result / pow_n(10, exponent - 1)) : (pow_n(result, exponent));
+	result *= negative;
+	
 	parent->value = (double *)malloc(sizeof(double));
 	*(double *)parent->value = result;
 
@@ -598,8 +557,8 @@ int print_all(item_t *head, int indent_s, size_t depth)
 		break;
 	case json_number:
 		numbuh = (*(double *)head->value);
-		if (numbuh == (int64_t)numbuh)
-			printf("%ld", (int64_t)numbuh);
+		if (numbuh == (int32_t)numbuh)
+			printf("%d", (int32_t)numbuh);
 		else
 			printf("%lf", numbuh);
 		break;
@@ -709,16 +668,14 @@ int parse_json(char *str)
 		head = (item_t *)malloc(sizeof(item_t));
 
 		int position = 0, line = 1, returnCode;
+
 		returnCode = parse_value(fptr, &position, &line, head);
 		if (!feof(fptr) && returnCode != FATAL_ERROR)
-			fprintf(stderr, "Syntax error: Unexpected non-whitespace character after JSON data at line (%d), position (%d)\n", line, position);
-		else if (returnCode == FATAL_ERROR)
-		{
-		}
+			fprintf(stderr, "SyntaxError: Unexpected non-whitespace character after JSON data at line (%d), position (%d)\n", line, position);
+		else if (returnCode == FATAL_ERROR) {}
 		else
-		{
 			print_all(head, 2, 0);
-		}
+		
 		free_everything(head);
 		fclose(fptr);
 

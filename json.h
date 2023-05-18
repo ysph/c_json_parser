@@ -1,6 +1,8 @@
-#define FATAL_ERROR -2
-#define LAST_ITEM   0x10
-#define EMPTY_ITEM  0x20
+#define FATAL_ERROR     -2
+#define FLOAT_DIGITS    9
+
+#define LAST_ITEM       0x10
+#define EMPTY_ITEM      0x20
 
 static const enum json_types {
     json_undefined,
@@ -35,7 +37,7 @@ typedef struct Item {
 } item_t;
 
 int parse_whitespace(FILE *fptr, int *restrict position, int *restrict line);
-int parse_number(FILE *fptr, int *restrict position, int *restrict line, item_t *parent);
+static int parse_number(FILE *fptr, int *restrict position, int *restrict line, item_t *parent);
 int parse_value(FILE *fptr, int *restrict position, int *restrict line, item_t *parent);
 int parse_array(FILE *fptr, int *restrict position, int *restrict line, item_t *parent);
 int parse_object(FILE *fptr, int *restrict position, int *restrict line, item_t *parent);
