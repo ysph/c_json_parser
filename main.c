@@ -4,11 +4,23 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+
 #include "json.h"
 
 #define is_digit(c) ((unsigned)((c) - '0') < 10)
-#define min(a,b) (((a) < (b)) ? (a) : (b))
+#define min(a, b) (((a) < (b)) ? (a) : (b))
 
+size_t g_pos = 0;
+size_t file_size = 0;
+
+static inline int is_EOF(void)
+{
+	return (g_pos >= file_size + 1);
+}
 static inline double pow_n(int N, int n)
 {
 	N <<= n;
@@ -16,13 +28,12 @@ static inline double pow_n(int N, int n)
 		N += N << 2;
 	return N;
 }
-
-int parse_whitespace(FILE *fptr, int *restrict position, int *restrict line)
+int parse_whitespace(const char *fstr, int *restrict position, int *restrict line)
 {
 	int8_t ch;
 	while (1)
 	{
-		ch = fgetc(fptr);
+		ch = fstr[g_pos++];
 		*position += 1;
 
 		switch (ch)
@@ -40,11 +51,9 @@ int parse_whitespace(FILE *fptr, int *restrict position, int *restrict line)
 	}
 	return FATAL_ERROR;
 }
-
-static int parse_number(FILE *fptr, int *restrict position, int *restrict line, item_t *parent)
+int parse_number(const char *fstr, int *restrict position, int *restrict line, item_t *parent)
 {
-	char ch;
-
+	int8_t ch;
 	int negative = 1; // 1 or -1
 	int negative_exp = 0;
 	int exponent = 0;
@@ -53,33 +62,33 @@ static int parse_number(FILE *fptr, int *restrict position, int *restrict line, 
 	double fraction = 0;
 
 	parent->type = json_number;
-	fseek(fptr, -1, SEEK_CUR);
-	ch = fgetc(fptr);
 
-	if (feof(fptr))
+	ch = fstr[g_pos - 1];
+	if (is_EOF())
 		return FATAL_ERROR;
 	if (ch == '-')
 	{
 		negative = -1;
-		ch = fgetc(fptr);
+		ch = fstr[g_pos++];
 		*position += 1;
 	}
-	if (is_digit(ch) && ch != '0') 
+	if (is_digit(ch) && ch != '0')
 	{
-		while (is_digit(ch)) {
+		while (is_digit(ch))
+		{
 			result = (result * 10) + (ch - '0');
-			ch = fgetc(fptr);
+			ch = fstr[g_pos++];
 			*position += 1;
-		}	
+		}
 	}
-	else if (ch == '0') 
+	else if (ch == '0')
 	{
-		ch = fgetc(fptr);
+		ch = fstr[g_pos++];
 		*position += 1;
-		if (feof(fptr))
+		if (is_EOF())
 			return FATAL_ERROR;
 	}
-	else if (feof(fptr))
+	else if (is_EOF())
 		return FATAL_ERROR;
 	else
 	{
@@ -92,29 +101,32 @@ static int parse_number(FILE *fptr, int *restrict position, int *restrict line, 
 		goto PARSE_STOP;
 
 	// parse_fraction
-	ch = fgetc(fptr);
+	ch = fstr[g_pos++];
 	*position += 1;
-	if (!is_digit(ch)) {
+	if (!is_digit(ch))
+	{
 		fprintf(stderr, "SyntaxError: Unterminated fractional number at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
-	while (is_digit(ch)) {
+	while (is_digit(ch))
+	{
 		fraction = (fraction * 10) + (ch - '0');
 		frac_digits += 1;
 
-		ch = fgetc(fptr);
+		ch = fstr[g_pos++];
 		*position += 1;
 	};
 	if (ch != 'e' && ch != 'E')
 		goto PARSE_STOP;
 PARSE_EXPONENT:
-	ch = fgetc(fptr);
+	ch = fstr[g_pos++];
 	*position += 1;
-	if (feof(fptr))
+	if (is_EOF())
 		return FATAL_ERROR;
-	if (ch == '-' || ch == '+') {
+	if (ch == '-' || ch == '+')
+	{
 		negative_exp = ch - '+';
-		ch = fgetc(fptr);
+		ch = fstr[g_pos++];
 		*position += 1;
 	}
 	if (!is_digit(ch))
@@ -125,7 +137,7 @@ PARSE_EXPONENT:
 	while (is_digit(ch))
 	{
 		exponent = (exponent * 10) + (ch - '0');
-		ch = fgetc(fptr);
+		ch = fstr[g_pos++];
 		*position += 1;
 	}
 
@@ -137,21 +149,21 @@ PARSE_STOP:
 	if (exponent)
 		result = (negative_exp) ? (result / pow_n(10, exponent - 1)) : (pow_n(result, exponent));
 	result *= negative;
-	
+
 	parent->value = (double *)malloc(sizeof(double));
 	*(double *)parent->value = result;
 
-	if (!feof(fptr))
+	if (!is_EOF())
 	{
-		fseek(fptr, -1, SEEK_CUR);
+		g_pos--;
 		*position -= 1;
 	}
 	return ch;
 }
 
-int parse_string(FILE *fptr, int *restrict position, int *restrict line, item_t *parent)
+int parse_string(const char *fstr, int *restrict position, int *restrict line, item_t *parent)
 {
-	char ch;
+	int8_t ch;
 	uint32_t hexxx;
 	uint32_t hexxx2;
 	int str_size = 1;
@@ -159,9 +171,9 @@ int parse_string(FILE *fptr, int *restrict position, int *restrict line, item_t 
 	parent->type = json_string;
 	parent->value = (char *)malloc(str_size);
 PARSE_NEXT:
-	while (!feof(fptr))
+	while (!is_EOF())
 	{
-		ch = fgetc(fptr);
+		ch = fstr[g_pos++];
 		*position += 1;
 		if (ch == '"')
 			return 0;
@@ -184,7 +196,7 @@ PARSE_NEXT:
 
 		if (ch == '\\')
 		{
-			ch = fgetc(fptr);
+			ch = fstr[g_pos++];
 			*position += 1;
 		PARSE_SOLIDUS_CHAR:
 			switch (ch)
@@ -214,9 +226,9 @@ PARSE_NEXT:
 
 				for (int i = 0; i < 4; i++)
 				{
-					ch = fgetc(fptr);
+					ch = fstr[g_pos++];
 					*position += 1;
-					if (feof(fptr))
+					if (is_EOF())
 						return FATAL_ERROR;
 					if (is_digit(ch))
 						hexxx = (hexxx << 4) + (ch - '0');
@@ -232,16 +244,16 @@ PARSE_NEXT:
 				}
 				if (hexxx >= 0xd800 && hexxx <= 0xdbff)
 				{
-					ch = fgetc(fptr);
+					ch = fstr[g_pos++];
 					*position += 1;
 					if (ch != '\\')
 					{
-						fseek(fptr, -1, SEEK_CUR);
 						*position -= 1;
+						g_pos--;
 						goto PARSE_NEXT;
 					}
 
-					ch = fgetc(fptr);
+					ch = fstr[g_pos++];
 					*position += 1;
 					if (ch != 'u')
 						goto PARSE_SOLIDUS_CHAR;
@@ -249,7 +261,7 @@ PARSE_NEXT:
 					hexxx2 = 0;
 					for (int i = 0; i < 4; ++i)
 					{
-						ch = fgetc(fptr);
+						ch = fstr[g_pos++];
 						*position += 1;
 						if (ch >= '0' && ch <= '9')
 							hexxx2 = (hexxx2 << 4) + (ch - '0');
@@ -292,7 +304,7 @@ PARSE_NEXT:
 					hexxx >>= 6;
 					__attribute__((fallthrough));
 				case 1:
-					*((char *)parent->value + str_size - (len + 1)) = hexxx | fByte[len];
+					*((char *)parent->value + str_size - (len + 1)) = hexxx | fByte[len - 1];
 				}
 				goto PARSE_NEXT;
 			default:
@@ -306,7 +318,7 @@ PARSE_NEXT:
 		((char *)parent->value)[str_size - 1] = '\0';
 	}
 
-	if (feof(fptr))
+	if (is_EOF())
 	{
 		fprintf(stderr, "SyntaxError: Unterminated string at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
@@ -315,91 +327,95 @@ PARSE_NEXT:
 	return FATAL_ERROR;
 }
 
-int parse_array(FILE *fptr, int *restrict position, int *restrict line, item_t *parent)
+int parse_array(const char *fstr, int *restrict position, int *restrict line, item_t *parent)
 {
-	char returnCode;
+	int8_t rc;
 	int size = 1;
 	parent->type = json_array;
 
-	returnCode = parse_whitespace(fptr, position, line);
-	if (feof(fptr))
+	rc = parse_whitespace(fstr, position, line);
+	if (is_EOF())
 	{
 		parent->type = json_undefined;
 		fprintf(stderr, "SyntaxError: Unexpected end of JSON input at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
-	if (returnCode == ']') {
+	if (rc == ']')
+	{
 		parent->type |= EMPTY_ITEM;
 		return 0;
 	}
-	fseek(fptr, -1, SEEK_CUR);
+	g_pos--;
 	*position -= 1;
 
 	parent->value = (item_t **)malloc(sizeof(item_t **) * size);
 	((item_t **)parent->value)[size - 1] = malloc(sizeof(item_t));
 
-	returnCode = parse_value(fptr, position, line, ((item_t **)parent->value)[size - 1]);
-	if (returnCode == FATAL_ERROR) {
+	rc = parse_value(fstr, position, line, ((item_t **)parent->value)[size - 1]);
+	if (rc == FATAL_ERROR)
+	{
 		((item_t **)parent->value)[size - 1]->type |= LAST_ITEM;
 		return FATAL_ERROR;
 	}
-	if (returnCode == ']') {
+	if (rc == ']')
+	{
 		((item_t **)parent->value)[size - 1]->type |= LAST_ITEM;
 		return 0;
 	}
-	else if (feof(fptr))
+	else if (is_EOF())
 	{
 		((item_t **)parent->value)[size - 1]->type |= LAST_ITEM;
 		fprintf(stderr, "SyntaxError: End of data when ',' or ']' was expected at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
-	else if (returnCode != ',')
+	else if (rc != ',')
 	{
 		((item_t **)parent->value)[size - 1]->type |= LAST_ITEM;
 		fprintf(stderr, "SyntaxError: Expected ',' or ']' after array element at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
-	while (returnCode == ',')
+	while (rc == ',')
 	{
 		size += 1;
 		parent->value = realloc(parent->value, sizeof(item_t **) * size);
 		((item_t **)parent->value)[size - 1] = (item_t *)malloc(sizeof(item_t));
-		returnCode = parse_value(fptr, position, line, ((item_t **)parent->value)[size - 1]);
+		rc = parse_value(fstr, position, line, ((item_t **)parent->value)[size - 1]);
 	}
 	((item_t **)parent->value)[size - 1]->type |= LAST_ITEM;
-	if (returnCode == FATAL_ERROR)
+	if (rc == FATAL_ERROR)
 		return FATAL_ERROR;
-	if (returnCode == ']')
+	if (rc == ']')
 		return 0;
 	fprintf(stderr, "SyntaxError: End of data when ',' or ']' was expected at line (%d), position (%d)\n", *line, *position);
 	return FATAL_ERROR;
 }
 
-int parse_object(FILE *fptr, int *restrict position, int *restrict line, item_t *parent)
+int parse_object(const char *fstr, int *restrict position, int *restrict line, item_t *parent)
 {
-	char returnCode;
+	int8_t rc;
 	int size = 0;
 	parent->type = json_object;
 
 PARSE_OBJECT:
-	returnCode = parse_whitespace(fptr, position, line);
-	if (feof(fptr))
+	rc = parse_whitespace(fstr, position, line);
+	if (is_EOF())
 	{
 		parent->type = json_undefined;
 		fprintf(stderr, "SyntaxError: Unexpected end of JSON input at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
-	if (size > 0 && returnCode != '"')
+	if (size > 0 && rc != '"')
 	{
 		parent->type = json_undefined;
 		fprintf(stderr, "SyntaxError: Expected double-quoted property name at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
-	if (returnCode == '}') {
+	if (rc == '}')
+	{
 		parent->type |= EMPTY_ITEM;
 		return 0;
 	}
-	if (returnCode != '"' && returnCode != '}')
+	if (rc != '"' && rc != '}')
 	{
 		parent->type = json_undefined;
 		fprintf(stderr, "SyntaxError: Expected property name or '}' at line (%d), position (%d)\n", *line, *position);
@@ -411,27 +427,27 @@ PARSE_OBJECT:
 	parent->value = realloc(parent->value, sizeof(item_t **) * size);
 	((item_t **)parent->value)[size - 2] = malloc(sizeof(item_t));
 	((item_t **)parent->value)[size - 2]->type = json_string;
-	if (parse_string(fptr, position, line, ((item_t **)parent->value)[size - 2]) == FATAL_ERROR)
+	if (parse_string(fstr, position, line, ((item_t **)parent->value)[size - 2]) == FATAL_ERROR)
 	{
 		((item_t **)parent->value)[size - 2]->type |= LAST_ITEM;
 		size -= 1;
 		return FATAL_ERROR;
 	}
-	returnCode = parse_whitespace(fptr, position, line);
-	if (returnCode == FATAL_ERROR)
+	rc = parse_whitespace(fstr, position, line);
+	if (rc == FATAL_ERROR)
 	{
 		((item_t **)parent->value)[size - 2]->type |= LAST_ITEM;
 		size -= 1;
 		return FATAL_ERROR;
 	}
-	if (feof(fptr))
+	if (is_EOF())
 	{
 		fprintf(stderr, "SyntaxError: End of data after property name when ':' was expected at line (%d), position (%d)\n", *line, *position);
 		((item_t **)parent->value)[size - 2]->type |= LAST_ITEM;
 		size -= 1;
 		return FATAL_ERROR;
 	}
-	if (returnCode != ':')
+	if (rc != ':')
 	{
 		((item_t **)parent->value)[size - 2]->type |= LAST_ITEM;
 		fprintf(stderr, "SyntaxError: Expected ':' after property name at line (%d), position (%d)\n", *line, *position);
@@ -440,37 +456,37 @@ PARSE_OBJECT:
 	}
 	((item_t **)parent->value)[size - 1] = malloc(sizeof(item_t));
 	((item_t **)parent->value)[size - 1]->type = json_undefined;
-	returnCode = parse_value(fptr, position, line, ((item_t **)parent->value)[size - 1]);
-	if (returnCode == ',')
+	rc = parse_value(fstr, position, line, ((item_t **)parent->value)[size - 1]);
+	if (rc == ',')
 		goto PARSE_OBJECT;
-		
+
 	((item_t **)parent->value)[size - 1]->type |= LAST_ITEM;
-	if (returnCode == FATAL_ERROR)
+	if (rc == FATAL_ERROR)
 		return FATAL_ERROR;
-	if (feof(fptr))
+	if (is_EOF())
 	{
 		fprintf(stderr, "SyntaxError: Unexpected end of JSON input at line (%d), position (%d)\n", *line, *position);
 		return FATAL_ERROR;
 	}
-	if (returnCode != '}')
+	if (rc != '}')
 	{
-		fprintf(stderr, "SyntaxError: Unexpected token %c at line (%d), position (%d)\n", returnCode, *line, *position);
+		fprintf(stderr, "SyntaxError: Unexpected token %c at line (%d), position (%d)\n", rc, *line, *position);
 		return FATAL_ERROR;
 	}
 	return 0;
 }
-int parse_bool(FILE *fptr, int *restrict position, int *restrict line, char *bool_str)
+int parse_bool(const char *fstr, int *restrict position, int *restrict line, char *bool_str)
 {
-	char ch;
+	int8_t ch;
 	*position -= 1;
 	size_t str_len = strlen(bool_str);
 	for (size_t i = 1; i < str_len; ++i)
 	{
-		ch = fgetc(fptr);
+		ch = fstr[g_pos++];
 		*position += 1;
 		if (ch == bool_str[i])
 			continue;
-		else if (feof(fptr))
+		else if (is_EOF())
 		{
 			fprintf(stderr, "SyntaxError: Unexpected end of JSON input at line (%d), position (%d)\n", *line, *position);
 			return FATAL_ERROR;
@@ -483,9 +499,9 @@ int parse_bool(FILE *fptr, int *restrict position, int *restrict line, char *boo
 	}
 	return 0;
 }
-int parse_value(FILE *fptr, int *restrict position, int *restrict line, item_t *parent)
+int parse_value(const char *fstr, int *restrict position, int *restrict line, item_t *parent)
 {
-	char ch = parse_whitespace(fptr, position, line);
+	int8_t ch = parse_whitespace(fstr, position, line);
 	switch (ch)
 	{
 	case '-':
@@ -499,44 +515,44 @@ int parse_value(FILE *fptr, int *restrict position, int *restrict line, item_t *
 	case '7':
 	case '8':
 	case '9':
-		if (parse_number(fptr, position, line, parent) == FATAL_ERROR)
+		if (parse_number(fstr, position, line, parent) == FATAL_ERROR)
 			return FATAL_ERROR;
 		break;
 	case '"':
-		if (parse_string(fptr, position, line, parent) == FATAL_ERROR)
+		if (parse_string(fstr, position, line, parent) == FATAL_ERROR)
 			return FATAL_ERROR;
 		break;
 	case '{':
-		if (parse_object(fptr, position, line, parent) == FATAL_ERROR)
+		if (parse_object(fstr, position, line, parent) == FATAL_ERROR)
 			return FATAL_ERROR;
 		break;
 	case '[':
-		if (parse_array(fptr, position, line, parent) == FATAL_ERROR)
+		if (parse_array(fstr, position, line, parent) == FATAL_ERROR)
 			return FATAL_ERROR;
 		break;
 	case 't':
-		if (parse_bool(fptr, position, line, "true") == FATAL_ERROR)
+		if (parse_bool(fstr, position, line, "true") == FATAL_ERROR)
 			return FATAL_ERROR;
 		parent->type = json_true;
 		break;
 	case 'n':
-		if (parse_bool(fptr, position, line, "null") == FATAL_ERROR)
+		if (parse_bool(fstr, position, line, "null") == FATAL_ERROR)
 			return FATAL_ERROR;
 		parent->type = json_null;
 		break;
 	case 'f':
-		if (parse_bool(fptr, position, line, "false") == FATAL_ERROR)
+		if (parse_bool(fstr, position, line, "false") == FATAL_ERROR)
 			return FATAL_ERROR;
 		parent->type = json_false;
 		break;
 	default:
-		if (feof(fptr))
+		if (is_EOF())
 			fprintf(stderr, "SyntaxError: Unexpected end of data at line (%d), position (%d)\n", *line, *position);
 		else
 			fprintf(stderr, "SyntaxError: Unexpected token '%c' at line (%d), position (%d)\n", ch, *line, *position);
 		return FATAL_ERROR;
 	}
-	return parse_whitespace(fptr, position, line);
+	return parse_whitespace(fstr, position, line);
 }
 
 int print_all(item_t *head, int indent_s, size_t depth)
@@ -575,18 +591,23 @@ int print_all(item_t *head, int indent_s, size_t depth)
 		putchar('[');
 		++depth;
 		i = 0;
-		while(1) {
-			if (head->type & EMPTY_ITEM) break;
+		while (1)
+		{
+			if (head->type & EMPTY_ITEM)
+				break;
 			putchar('\n');
-			for (j = 0; j < depth; ++j) {
-				printf("%s",space);
+			for (j = 0; j < depth; ++j)
+			{
+				printf("%s", space);
 			}
 			print_all(((item_t **)head->value)[i], indent_s, depth);
-			if (((item_t **)head->value)[i]->type & LAST_ITEM) {
+			if (((item_t **)head->value)[i]->type & LAST_ITEM)
+			{
 				putchar('\n');
 				--depth;
-				for (j = 0; j < depth; ++j) {
-					printf("%s",space);
+				for (j = 0; j < depth; ++j)
+				{
+					printf("%s", space);
 				}
 				break;
 			}
@@ -600,26 +621,34 @@ int print_all(item_t *head, int indent_s, size_t depth)
 		putchar('{');
 		++depth;
 		i = 0;
-		while(1) {
-			if (head->type & EMPTY_ITEM) break;
-			if (!(i % 2)) {
+		while (1)
+		{
+			if (head->type & EMPTY_ITEM)
+				break;
+			if (!(i % 2))
+			{
 				putchar('\n');
-				
-				for (j = 0; j < depth; ++j) {
-					printf("%s",space);
+
+				for (j = 0; j < depth; ++j)
+				{
+					printf("%s", space);
 				}
 			}
 			print_all(((item_t **)head->value)[i], indent_s, depth);
-			if (((item_t **)head->value)[i]->type & LAST_ITEM) {
+			if (((item_t **)head->value)[i]->type & LAST_ITEM)
+			{
 				putchar('\n');
 				--depth;
-				for (j = 0; j < depth; ++j) {
-					printf("%s",space);
+				for (j = 0; j < depth; ++j)
+				{
+					printf("%s", space);
 				}
 				break;
 			}
-			if (i % 2) putchar(',');
-			else putchar(':');
+			if (i % 2)
+				putchar(',');
+			else
+				putchar(':');
 			i++;
 		}
 		putchar('}');
@@ -645,11 +674,14 @@ int free_everything(item_t *Node)
 	case json_array:
 	case json_object:
 		i = 0;
-		if (Node->type & EMPTY_ITEM) break;
-		while(1) {
+		if (Node->type & EMPTY_ITEM)
+			break;
+		while (1)
+		{
 			res = ((item_t **)Node->value)[i]->type & LAST_ITEM;
 			free_everything(((item_t **)Node->value)[i]);
-			if (res) break;
+			if (res)
+				break;
 			++i;
 		}
 		free(Node->value);
@@ -658,45 +690,69 @@ int free_everything(item_t *Node)
 	free(Node);
 	return 0;
 }
-int parse_json(char *str)
+int parse_json(char *filename)
 {
-	FILE *fptr;
-	fptr = fopen(str, "r");
-	if (fptr)
+	// info
+	int position = 0; // at line
+	int line = 1;
+	int rc;
+	// handling file
+	int fd;
+	struct stat s;
+	const char *fstr;
+	fd = open(filename, O_RDONLY);
+	if (fd < 0)
 	{
-		item_t *head;
-		head = (item_t *)malloc(sizeof(item_t));
-
-		int position = 0, line = 1, returnCode;
-
-		returnCode = parse_value(fptr, &position, &line, head);
-		if (!feof(fptr) && returnCode != FATAL_ERROR)
-			fprintf(stderr, "SyntaxError: Unexpected non-whitespace character after JSON data at line (%d), position (%d)\n", line, position);
-		else if (returnCode == FATAL_ERROR) {}
-		else
-			print_all(head, 2, 0);
-		
-		free_everything(head);
-		fclose(fptr);
-
-		return 0;
+		fprintf(stderr, "Error: Open %s failed (%s)\n", filename, strerror(errno));
+		return errno;
 	}
+	if (fstat(fd, &s) < 0)
+	{
+		fprintf(stderr, "Error: Open %s failed (%s)\n", filename, strerror(errno));
+		return errno;
+	}
+	file_size = s.st_size;
+	fstr = mmap(0, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+	if (fstr == MAP_FAILED)
+	{
+		fprintf(stderr, "Error: Open %s failed (%s)\n", filename, strerror(errno));
+		return errno;
+	}
+	// if everything is in order, then continue
+	g_pos = 0;
+	item_t *head;
+	head = (item_t *)malloc(sizeof(item_t));
+	rc = parse_value(fstr, &position, &line, head);
+	if (!is_EOF() && rc != FATAL_ERROR)
+		fprintf(stderr, "SyntaxError: Unexpected non-whitespace character after JSON data at line (%d), position (%d)\n", line, position);
+	else if (rc == FATAL_ERROR)
+	{
+	}
+	else
+	{
+		print_all(head, 2, 0);
+		putchar('\n');
+	}
+	free_everything(head);
 
-	return -1;
+	return 0;
 }
 int main(int argc, char *argv[])
 {
+	int i;
 	if (argc == 1)
 	{
 		fprintf(stderr, "Error: there is no file to parse.\n");
-		return 1;
+		return -1;
 	}
-	printf("File -- %s\n\n", argv[argc - 1]);
-
-	if (parse_json(argv[1]))
+	for (i = 1; i < argc; ++i)
 	{
-		fprintf(stderr, "Error: file cannot be accessed.\n");
-		return 1;
+		printf("File -- %s\n", argv[i]);
+		if (parse_json(argv[i]) < 0)
+			return -1;
+		if (i != argc - 1)
+			putchar('\n');
 	}
+
 	return 0;
 }

@@ -29,19 +29,19 @@ static const enum control_chars {
 } __attribute__ ((__packed__)) control_chars;
 
 // transcode depends on length of utf char
-static const unsigned char fByte[7] = {0x00, 0x00, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc};
+static const unsigned char fByte[4] = {0x00, 0xc0, 0xe0, 0xf0};
 
 typedef struct Item {
     int8_t type;
     void *value;
 } item_t;
 
-int parse_whitespace(FILE *fptr, int *restrict position, int *restrict line);
-static int parse_number(FILE *fptr, int *restrict position, int *restrict line, item_t *parent);
-int parse_value(FILE *fptr, int *restrict position, int *restrict line, item_t *parent);
-int parse_array(FILE *fptr, int *restrict position, int *restrict line, item_t *parent);
-int parse_object(FILE *fptr, int *restrict position, int *restrict line, item_t *parent);
-int parse_bool(FILE *fptr, int *restrict position, int *restrict line, char *bool_str);
+int parse_whitespace(const char *fstr, int *restrict position, int *restrict line);
+int parse_number(const char *fstr, int *restrict position, int *restrict line, item_t *parent);
+int parse_value(const char *fstr, int *restrict position, int *restrict line, item_t *parent);
+int parse_array(const char *fstr, int *restrict position, int *restrict line, item_t *parent);
+int parse_object(const char *fstr, int *restrict position, int *restrict line, item_t *parent);
+int parse_bool(const char *fstr, int *restrict position, int *restrict line, char *bool_str);
 int parse_json(char *str);
 
 int print_all(item_t *head, int indent_s, size_t depth);
