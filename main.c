@@ -6,6 +6,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
 
@@ -734,7 +735,8 @@ int parse_json(char *filename)
 		putchar('\n');
 	}
 	free_everything(head);
-
+	close(fd);
+	
 	return 0;
 }
 int main(int argc, char *argv[])
